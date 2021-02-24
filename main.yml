@@ -327,7 +327,18 @@
               }
 
               $null = New-WSManInstance @wsmanParams
-              $null = netsh interface portproxy add v4tov4 listenaddress={{ ansible_host }} listenport=$_.ExternalPort connectaddress=$address connectport=$_.ListenerPort
+
+              $portArgs = @(
+                  'interface',
+                  'portproxy',
+                  'add',
+                  'v4tov4',
+                  'listenaddress={{ ansible_host }}',
+                  "listenport=$($_.ExternalPort)",
+                  "connectaddress=$address",
+                  "connectport=$($_.ListenerPort)"
+              )
+              $null = netsh $portArgs
               $changed = $true
           }
       }
@@ -457,7 +468,7 @@
     service:
       name: NetworkManager
       state: restarted
-    when: networkman_conf is changed or dnsmsq_conf is changed
+    when: networkman_conf is changed or dnsmasq_conf is changed
 
   - name: template krb5.conf file
     template:
