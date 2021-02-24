@@ -1,0 +1,73 @@
+all:
+  children:
+    windows:
+      hosts:
+        DC:
+          ansible_host: 192.168.10.10
+          vagrant_box: jborean93/WindowsServer2019
+        APP:
+          ansible_host: 192.168.10.11
+          vagrant_box: jborean93/WindowsServer2019
+        TEST:
+          ansible_host: 192.168.10.12
+          vagrant_box: jborean93/WindowsServer2019
+      vars:
+        ansible_port: 5985
+        ansible_connection: psrp
+        ansible_psrp_auth: ntlm
+    linux:
+      hosts:
+        SQUID:
+          ansible_host: 192.168.10.20
+          vagrant_box: centos/7
+  vars:
+    ansible_user: vagrant
+    ansible_password: vagrant
+    proxy_username: proxy_username
+    proxy_password: proxy_password
+    domain_username: vagrant-domain
+    domain_password: VagrantPass1
+    domain_realm: wsman.env
+
+    proxy_info:
+    - type: no_auth
+      auth: none
+      port: 3129
+    - type: basic
+      auth: basic
+      port: 3130
+    - type: ldap
+      auth: ldap
+      port: 3131
+    - type: kerb
+      auth: kerb
+      port: 3132
+
+    # Defines the HTTPS listeners to set up and metadata around the cert that backs it.
+    # The ports used are every 2nd number from the base port, e.g. 29900, 299002, 29904, etc.
+    # The default port (5986) is a self signed certificate that is not trusted at all.
+    #   test: The test name to set as the friendly name prefix of the cert
+    #   algorithm: The public key algorithm to use for the certificate (default: sha256)
+    #   subject: Explicit subject to set for the certificate (default is the FQDN of the host)
+    #   self_signed: Whether the host is self signed or signed by a common CA (default: no)
+    #   system_ca: Whether to sign it with the common system CA or use the explicit one (default: yes)
+    certificate_base_port: 29900
+    certificate_info:
+    - test: verification
+    - test: verification-bad-ca
+      self_signed: yes
+    - test: verification-bad-cn
+      subject: fake-host
+    - test: verification-other-ca
+      system_ca: no
+    - test: cbt-sha1
+      algorithm: sha1
+    - test: cbt-sha256-pss
+      algorithm: sha256-pss
+    - test: cbt-sha384
+      algorithm: sha384
+    - test: cbt-sha512
+      algorithm: sha512
+    - test: cbt-sha512-pss
+      algorithm: sha512-pss
+

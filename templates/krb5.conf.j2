@@ -1,0 +1,13 @@
+[libdefaults]
+  default_realm = {{ domain_realm | upper }}
+
+[realms]
+  {{ domain_realm | upper }} = {
+    kdc = dc.{{ domain_realm }}
+    admin_server = dc.{{ domain_realm }}
+  }
+
+[domain_realm]
+  {{ domain_realm }} = {{ domain_realm | upper }}
+  .{{ domain_realm }} = {{ domain_realm | upper }}
+

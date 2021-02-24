@@ -1,0 +1,515 @@
+- name: setup local configuration and scratch information
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+  - name: create build directory
+    file:
+      path: '{{ playbook_dir }}/build'
+      state: directory
+
+  - name: create cert output folder
+    file:
+      path: '{{ playbook_dir }}/build/cert_setup'
+      state: directory
+
+  - name: create generate_cert script
+    template:
+      src: generate_cert.sh.tmpl
+      dest: '{{ playbook_dir }}/build/cert_setup/generate_cert.sh'
+      mode: '700'
+
+  - name: generate CA and WinRM certificate
+    shell: ./generate_cert.sh {{ ('TEST.' ~ domain_realm) | quote }} password
+    args:
+      creates: '{{ playbook_dir }}/build/cert_setup/complete.txt'
+      chdir: '{{ playbook_dir }}/build/cert_setup'
+
+  - name: copy CA certificate to root of build
+    copy:
+      src: '{{ playbook_dir }}/build/cert_setup/{{ item }}'
+      dest: '{{ playbook_dir }}/build/{{ item }}'
+    loop:
+    - ca.pem
+    - ca_explicit.pem
+
+  - name: generate krb5.conf for localhost configuration
+    template:
+      src: krb5.conf.j2
+      dest: '{{ playbook_dir }}/build/krb5.conf'
+
+  - name: create custom hosts file for localhost
+    copy:
+      dest: '{{ playbook_dir }}/build/hosts'
+      content: |
+        {{ hostvars['DC']['ansible_host'] }} dc.{{ domain_realm }}
+        {{ hostvars['TEST']['ansible_host'] }} test.{{ domain_realm }}
+        {{ hostvars['SQUID']['ansible_host'] }} squid.{{ domain_realm }}
+
+  - name: create environment activation script
+    copy:
+      dest: '{{ playbook_dir }}/build/activate.sh'
+      content: |
+        #!/usr/bin/env bash
+
+        export KRB5_CONFIG="{{ playbook_dir }}/build/krb5.conf"
+        export HOSTALIASES="{{ playbook_dir }}/build/hosts"
+      mode: '700'
+
+- name: get Windows network adapter info
+  hosts: windows
+  gather_facts: no
+  tags:
+  - windows
+
+  tasks:
+  - name: get network connection names
+    win_shell: |
+      Get-CimInstance -ClassName Win32_NetworkAdapter -Filter "Netenabled='True'" | ForEach-Object -Process {
+        $config = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "Index='$($_.Index)'"
+        if ($config.IPAddress -contains '{{ ansible_host }}') {
+          $_.NetConnectionID
+        }
+      }
+    changed_when: false
+    register: raw_connection_name
+
+  - set_fact:
+      public_connection_name: '{{ raw_connection_name.stdout | trim }}'
+
+- name: create domain controller
+  hosts: DC
+  gather_facts: no
+  tags:
+  - windows
+
+  tasks:
+  - name: set the DNS for the internal adapters to localhost
+    win_dns_client:
+      adapter_names:
+      - '{{ public_connection_name }}'
+      dns_servers:
+      - 127.0.0.1
+
+  - name: ensure domain exists and DC is promoted as a domain controller
+    win_domain:
+      dns_domain_name: '{{ domain_realm }}'
+      safe_mode_password: '{{ domain_password }}'
+    register: domain_setup_res
+
+  - name: reboot after DC install
+    win_reboot:
+    when: domain_setup_res.reboot_required
+
+  - name: create domain username
+    win_domain_user:
+      name: '{{ domain_username }}'
+      upn: '{{ domain_username }}@{ domain_relam | upper }}'
+      description: '{{ domain_username }} Domain Account'
+      password: '{{ domain_password }}'
+      password_never_expires: yes
+      update_password: when_changed
+      groups:
+      - Domain Admins
+      state: present
+    register: domain_user_res
+    # ADWS won't be online after the first reboot, just keep on trying
+    retries: 30
+    delay: 15
+    until: domain_user_res is successful
+
+  - name: create proxy principal account
+    win_domain_user:
+      name: squid
+      upn: squid@{{ domain_realm | upper }}
+      password: '{{ domain_password }}'
+      attributes:
+        msDS-SupportedEncryptionTypes: 16  # AES256
+      password_never_expires: yes
+      user_cannot_change_password: yes
+      state: present
+      update_password: on_create
+
+  - name: register SPN for proxy principal
+    win_command: setspn -S HTTP/squid.{{ domain_realm }} squid
+    register: spn_create
+    changed_when: '"Updated object" in spn_create.stdout'
+    failed_when: spn_create is failed and "Duplicate SPN found" not in spn_create.stdout
+
+  - name: create keytab for proxy principal
+    win_command: >
+      ktpass -out C:\Users\{{ ansible_user }}\Documents\proxy.keytab
+      -princ HTTP/squid.{{ domain_realm }}@{{ domain_realm | upper }}
+      -mapUser squid@{{ domain_realm | upper }}
+      -pass {{ domain_password }}
+      -crypto AES256-SHA1
+      -pType KRB5_NT_PRINCIPAL
+    args:
+      creates: C:\Users\{{ ansible_user }}\Documents\proxy.keytab
+
+  - name: fetch proxy keytab
+    fetch:
+      src: C:\Users\{{ ansible_user }}\Documents\proxy.keytab
+      dest: '{{ playbook_dir }}/build/proxy.keytab'
+      flat: yes
+
+  - name: create DNS A record for proxy host
+    win_shell: |
+      $realm = '{{ domain_realm }}'
+      $address = '{{ hostvars["SQUID"]["ansible_host"] }}'
+      if (-not (Get-DnsServerResourceRecord -Name squid -ZoneName $realm -RRType 'A' -ErrorAction SilentlyContinue)) {
+        Add-DnsServerResourceRecordA -Name squid -ZoneName $realm -IPv4Address $address
+        "changed"
+      }
+    register: dns_record
+    changed_when: dns_record.stdout|trim == "changed"
+
+- name: join Windows hosts to the domain
+  hosts: windows:!DC
+  gather_facts: no
+  tags:
+  - windows
+
+  tasks:
+  - name: set DNS for the private adapter to point to the DC
+    win_dns_client:
+      adapter_names:
+      - '{{ public_connection_name }}'
+      dns_servers:
+      - '{{ hostvars["DC"]["ansible_host"] }}'
+
+  - name: join host to the domain
+    win_domain_membership:
+      dns_domain_name: '{{ domain_realm }}'
+      domain_admin_user: '{{ domain_username }}@{{ domain_realm | upper }}'
+      domain_admin_password: '{{ domain_password }}'
+      state: domain
+    register: domain_join
+
+  - name: reboot after joining domain
+    win_reboot:
+    when: domain_join.reboot_required
+
+- name: setup test WinRM host
+  hosts: TEST
+  gather_facts: no
+  tags:
+  - windows
+
+  tasks:
+  - name: copy certificate to the Windows host
+    win_copy:
+      src: '{{ playbook_dir }}/build/cert_setup'
+      dest: C:\Windows\TEMP\
+
+  - name: import WinRM certs to the certificate store
+    win_certificate_store:
+      path: C:\Windows\TEMP\cert_setup\{{ item.test }}.pfx
+      key_exportable: no
+      key_storage: machine
+      password: password
+      state: present
+      store_location: LocalMachine
+      store_name: My
+    register: winrm_cert_info
+    loop: '{{ certificate_info }}'
+    loop_control:
+      label: '{{ item.test }}'
+
+  # WinRM is frustratingly annoying to create an endpoint over multiple ports without having a separate adapter for
+  # each listener so we just create a dummy loopback adapter for each one.
+  # We create a duplicate interface for each scenario for the proxy only connections
+  - name: create dummy loopback adapters for WinRM endpoints
+    win_device:
+      path: '%WinDir%\Inf\netloop.inf'
+      hardware_id: '*msloop'
+      name: 'Microsoft KM-TEST Loopback Adapter{{ (item|int == 0) | ternary("", " #" ~ (item|int + 1)) }}'
+      state: present
+    register: loopback_adapters
+    loop: '{{ range(0, (certificate_info | length + 1) * 2, 1) | list }}'  # Add 1 for the HTTP listener
+
+  # The other annoying part is that the WinRM service checks that requests come from the registered address it is
+  # meant to listen on. Because it is set to listen on a local loopback address we forward the external port for WinRM
+  # to the internal port the listener is set to use. This means WinRM thinks the request came over that address when
+  # it actually came from the normal external address.
+  - name: setup WinRM listeners for each certificate and the friendly name of those certs
+    win_shell: |
+      $ErrorActionPreference = 'Stop'
+      $changed = $false
+
+      $basePort = {{ certificate_base_port }}
+      $externalPort = $basePort + ({{ item|int }} * 4)
+      $listenerPort = $externalPort + 1
+      $externalProxyPort = $listenerPort + 1
+      $listenerProxyPort = $externalProxyPort + 1
+      $adapterName = '{{ loopback_adapters.results[(item * 2)|int].name }}'
+      $adapterProxyName = '{{ loopback_adapters.results[(item * 2)|int + 1].name }}'
+
+      {% if (item|int < certificate_info|length) %}
+      $desiredName = "test_{{ certificate_info[item|int].test }}_$externalPort_$externalProxyPort"
+      $thumbprint = '{{ winrm_cert_info.results[item|int].thumbprints[0] }}'
+      $transport = 'HTTPS'
+
+      # Set the friendly name of the cert so we can easily map them to an endpoint
+      $cert = Get-Item -LiteralPath "Cert:\LocalMachine\My\$thumbprint"
+      if ($cert.FriendlyName -ne $desiredName) {
+          $cert.FriendlyName = $desiredName
+          $changed = $true
+      }
+      {% else %}
+      $desiredName = ''
+      $thumbprint = ''
+      $transport = 'HTTP'
+      {% endif %}
+
+      @(
+          [PSCustomObject]@{
+              ExternalPort = $externalPort
+              ListenerPort = $listenerPort
+              AdapterName = $adapterName
+          },
+          [PSCustomObject]@{
+              ExternalPort = $externalProxyPort
+              ListenerPort = $listenerProxyPort
+              AdapterName = $adapterProxyName
+          }
+      ) | ForEach-Object -Process {
+
+          # Get the IP address of the loopback adapter. The IP may not be ready yet if it was just created. Just sleep a
+          # few times before trying again.
+          $address = $null
+          while ($true) {
+              $address = Get-NetAdapter -InterfaceDescription $_.AdapterName | Get-NetIPAddress | Where-Object AddressFamily -eq IPv4
+              if (-not $address.IPAddress) {
+                  Start-Sleep -Seconds 1
+              } else {
+                  $address = $address.IPAddress
+                  break
+              }
+          }
+
+          # See if the listener for the loopback adapter is already set.
+          $listener = Get-ChildItem -Path WSMan:\localhost\Listener |
+              Where-Object { $_.Keys -contains "Transport=$transport" } |
+              ForEach-Object -Process {
+                  $details = Get-ChildItem -Path $_.PSPath
+                  [PSCustomObject]@{
+                      PSPath = $_.PSPath
+                      Address = ($details | Where-Object Name -eq Address).Value
+                      Port = ($details | Where-Object Name -eq Port).Value
+                      CertificateThumbprint = ($details | Where-Object Name -eq CertificateThumbprint).Value
+                  }
+              } |
+              Where-Object Port -eq $_.ListenerPort
+
+          # If the listener already exists but is for a different cert or IP then remove it.
+          if ($listener -and ($listener.Address -ne ('IP:{0}' -f $address) -or $listener.CertificateThumbprint -ne $thumbprint)) {
+              Remove-Item -LiteralPath $listener.PSPath -Force -Recurse
+              $listener = $null
+              $changed = $true
+          }
+
+          # Create the listener if required and forward the external port to the internal one.
+          if (-not $listener) {
+              $wsmanParams = @{
+                  ResourceURI = 'winrm/config/Listener'
+                  SelectorSet = @{
+                      Address = ('IP:{0}' -f $address)
+                      Transport = $transport
+                  }
+                  ValueSet = @{
+                      Port = $_.ListenerPort
+                  }
+              }
+
+              if ($thumbprint) {
+                  $wsmanParams.ValueSet.CertificateThumbprint = $thumbprint
+              }
+
+              $null = New-WSManInstance @wsmanParams
+              $null = netsh interface portproxy add v4tov4 listenaddress={{ ansible_host }} listenport=$_.ExternalPort connectaddress=$address connectport=$_.ListenerPort
+              $changed = $true
+          }
+      }
+
+      $changed
+    register: winrm_listener_setup
+    changed_when: winrm_listener_setup.stdout | trim | bool
+    loop: '{{ range(0, (certificate_info | length) + 1, 1) | list }}'  # 1 for the HTTP listener
+
+  - name: build list of WinRM ports
+    set_fact:
+      winrm_ports: >-
+        {{
+          winrm_ports | default([
+              {"name": "http-public", "port": certificate_base_port + (certificate_info|length * 4)},
+              {"name": "http-proxy", "port": certificate_base_port + (certificate_info|length * 4) + 2}
+          ]) +
+          [
+              {"name": certificate_info[item|int].test ~ "-public", "port": certificate_base_port + (item|int * 4)},
+              {"name": certificate_info[item|int].test ~ "-proxy", "port": certificate_base_port + (item|int * 4) + 2}
+          ]
+        }}
+    loop: '{{ range(0, certificate_info | length, 1) | list }}'
+
+  - name: get list of firewall rules for our WinRM ports
+    win_shell: |
+      Get-NetFirewallPortFilter | Where-Object LocalPort -eq {{ item.port }} | ForEach-Object -Process {
+        (Get-NetFirewallRule -AssociatedNetFirewallPortFilter $_).DisplayName
+      } | Sort-Object -Unique | Where-Object { -not $_.StartsWith('WinRM Test Rule') }
+    loop: '{{ winrm_ports }}'
+    changed_when: false
+    register: winrm_rules
+
+  - name: create allow all WinRM firewall rules
+    win_firewall_rule:
+      name: WinRM Test Rule {{ item.name }}
+      localport: '{{ item.port }}'
+      action: allow
+      direction: in
+      protocol: tcp
+      enabled: yes
+      state: present
+    when: item.name.endswith('-public')
+    loop: '{{ winrm_ports }}'
+
+  - name: create allow only proxy host WinRM firewall rules
+    win_firewall_rule:
+      name: WinRM Test Rule {{ item.name }}
+      localport: '{{ item.port }}'
+      remoteip: '{{ hostvars["SQUID"]["ansible_host"] }}'
+      action: allow
+      direction: in
+      protocol: tcp
+      enabled: yes
+      state: present
+    when: item.name.endswith('-proxy')
+    loop: '{{ winrm_ports }}'
+
+  - name: remove builtin WinRM firewall rules
+    win_firewall_rule:
+      name: '{{ item }}'
+      state: absent
+    loop: '{{ winrm_rules.results | map(attribute="stdout_lines") | flatten | list }}'
+
+  - name: make sure the CBT level is set to Strict
+    win_shell: |
+      $cbtPath = 'WSMan:\localhost\Service\Auth\CbtHardeningLevel'
+      if ((Get-Item -LiteralPath $cbtPath).Value -ne 'Strict') {
+          Set-Item -LiteralPath $cbtPath -Value Strict
+          $true
+      } else {
+        $false
+      }
+    register: cbt_result
+    changed_when: cbt_result.stdout | trim | bool
+
+- name: create fileshare on app server
+  hosts: APP
+  gather_facts: no
+  tags:
+  - windows
+
+  tasks:
+  - name: create share folder
+    win_file:
+      path: C:\share
+      state: directory
+
+  - name: create share of folder
+    win_share:
+      name: share
+      path: C:\share
+      full: Everyone
+      state: present
+
+- name: setup Linux proxy host
+  hosts: linux
+  become: yes
+  gather_facts: no
+  tags:
+  - linux
+
+  tasks:
+  - name: install Kerberos packages
+    yum:
+      name:
+      - dnsmasq
+      - krb5-devel
+      - krb5-workstation
+      state: present
+
+  - name: setup NetworkManager to use dnsmasq
+    copy:
+      dest: /etc/NetworkManager/conf.d/dns.conf
+      content: |
+        [main]
+        dns=dnsmasq
+    register: networkman_conf
+
+  - name: setup dnsmasq to forward request for domain to DC
+    copy:
+      dest: /etc/NetworkManager/dnsmasq.d/{{ domain_realm }}
+      content: address=/{{ domain_realm }}/{{ hostvars['DC']['ansible_host'] }}
+    register: dnsmasq_conf
+
+  - name: restart NetworkManager.service
+    service:
+      name: NetworkManager
+      state: restarted
+    when: networkman_conf is changed or dnsmsq_conf is changed
+
+  - name: template krb5.conf file
+    template:
+      src: krb5.conf.j2
+      dest: /etc/krb5.conf
+
+  - name: setup Squid packages
+    yum:
+      name:
+      - squid
+      - httpd-tools
+      - python-passlib
+      state: present
+
+  - name: copy squid keytab file
+    copy:
+      src: '{{ playbook_dir }}/build/proxy.keytab'
+      dest: /etc/squid/squid.keytab
+      group: squid
+
+  - name: create htpasswd file for basic auth
+    htpasswd:
+      create: yes
+      name: '{{ proxy_username }}'
+      password: '{{ proxy_password }}'
+      path: /etc/squid/passwd
+      owner: squid
+      state: present
+
+  - name: template out Squid config files
+    template:
+      src: squid.conf.j2
+      dest: /etc/squid/squid.{{ item.type }}.conf
+      group: squid
+    vars:
+      auth: '{{ item.auth }}'
+      port: '{{ item.port }}'
+    loop: '{{ proxy_info }}'
+
+  - name: template out squid service units
+    template:
+      src: systemd_unit.service.j2
+      dest: /etc/systemd/system/squid_{{ item.type }}.service
+    vars:
+      description: Squid caching proxy - {{ item.type }}
+      config_file: /etc/squid/squid.{{ item.type }}.conf
+    loop: '{{ proxy_info }}'
+
+  - name: start proxy services
+    systemd:
+      name: squid_{{ item.type }}.service
+      enabled: yes
+      state: started
+    loop: '{{ proxy_info }}'
+

@@ -1,0 +1,17 @@
+[Unit]
+Description={{ description }}
+After=syslog.target network.target nss-lookup.target
+
+[Service]
+Type=forking
+LimitNOFILE=16384
+EnvironmentFile=/etc/sysconfig/squid
+ExecStartPre=/usr/libexec/squid/cache_swap.sh
+ExecStart=/usr/sbin/squid $SQUID_OPTS -f {{ config_file }}
+ExecReload=/usr/sbin/squid $SQUID_OPTS -k reconfigure -f {{ config_file }}
+ExecStop=/usr/sbin/squid -k shutdown -f {{ config_file }}
+TimeoutSec=0
+
+[Install]
+WantedBy=multi-user.target
+
