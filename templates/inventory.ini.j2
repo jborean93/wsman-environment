@@ -21,7 +21,16 @@ https_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}} ansible
 
 # Tests out various proxy setups
 http  ansible_port={{ http_port }}
+http_ntlm  ansible_port={{ http_port }} ansible_psrp_auth=ntlm
+http_kerberos  ansible_port={{ http_port }} ansible_psrp_auth=kerberos
+http_credssp  ansible_port={{ http_port }} ansible_psrp_auth=credssp
+
 https ansible_port={{ certificate_base_port }} ansible_psrp_ca_cert=ca.pem
+https_cert  ansible_port={{ certificate_base_port }} ansible_psrp_auth=certificate ansible_psrp_ca_cert=ca.pem ansible_psrp_certificate_pem=client_auth.pem ansible_psrp_certificate_key_pem=client_auth.key
+https_basic_auth  ansible_port={{ certificate_base_port }} ansible_psrp_auth=basic ansible_user={{ local_username }} ansible_password={{ local_password }} ansible_psrp_ca_cert=ca.pem
+https_ntlm  ansible_port={{ certificate_base_port }} ansible_psrp_auth=ntlm ansible_psrp_ca_cert=ca.pem
+https_kerberos  ansible_port={{ certificate_base_port }} ansible_psrp_auth=kerberos ansible_psrp_ca_cert=ca.pem
+https_credssp  ansible_port={{ certificate_base_port }} ansible_psrp_auth=credssp ansible_psrp_ca_cert=ca.pem
 {% for proxy in proxy_info %}
 {% if proxy.type == 'basic' %}
 {% set proxy_url_cred = proxy_username ~ ':' ~ proxy_password ~ '@' %}
@@ -32,10 +41,12 @@ https ansible_port={{ certificate_base_port }} ansible_psrp_ca_cert=ca.pem
 {% endif %}
 http_{{ proxy.type }}  ansible_port={{ http_port + 2 }} ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/
 https_{{ proxy.type }}  ansible_port=29900 ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/ ansible_psrp_ca_cert=ca.pem
+https_{{ proxy.type }}_cert  ansible_port=29900 ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/ ansible_psrp_auth=certificate ansible_psrp_ca_cert=ca.pem ansible_psrp_certificate_pem=client_auth.pem ansible_psrp_certificate_key_pem=client_auth.key
 
 {% endfor %}
 http_proxy_sock  ansible_port={{ http_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/
 https_proxy_sock  ansible_port={{ certificate_base_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/ ansible_psrp_ca_cert=ca.pem
+
 
 [windows:vars]
 ansible_host=test.{{ domain_realm }}
@@ -48,6 +59,9 @@ ansible_psrp_negotiate_service=http
 [win_http]
 http_vanilla
 http
+http_ntlm
+http_kerberos
+http_credssp
 {% for proxy in proxy_info %}
 http_{{ proxy.type }}
 {% endfor %}
@@ -62,8 +76,14 @@ https_vanilla
 https_{{ certificate_info[n].test }}
 {% endfor %}
 https
+https_cert
+https_basic_auth
+https_ntlm
+https_kerberos
+https_credssp
 {% for proxy in proxy_info %}
 https_{{ proxy.type }}
+https_{{ proxy.type }}_cert
 {% endfor %}
 https_proxy_sock
 

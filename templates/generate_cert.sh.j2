@@ -104,6 +104,58 @@ openssl req \
     -subj "/CN=WinRM Root Explicit" \
     -passin pass:"${PASSWORD}"
 
+echo "Generating client auth for {{ local_username }}"
+cat > openssl.conf << EOL
+distinguished_name = req_distinguished_name
+[req_distinguished_name]
+[v3_req_client]
+extendedKeyUsage = clientAuth
+subjectAltName = otherName:1.3.6.1.4.1.311.20.2.3;UTF8:{{ local_username }}@localhost
+EOL
+
+openssl req \
+  -new \
+  -sha256 \
+  -subj "/CN={{ local_username }}" \
+  -newkey rsa:2048 \
+  -keyout client_auth_password.key \
+  -out client_auth.csr \
+  -config openssl.conf \
+  -reqexts v3_req_client \
+  -passin pass:"${PASSWORD}" \
+  -passout pass:"${PASSWORD}"
+
+openssl x509 \
+  -req \
+  -in client_auth.csr \
+  -sha256 \
+  -out client_auth.pem \
+  -days 365 \
+  -extfile openssl.conf \
+  -extensions v3_req_client \
+  -passin pass:"${PASSWORD}" \
+  -CA ca.pem \
+  -CAkey ca.key \
+  -CAcreateserial
+
+openssl pkcs12 \
+  -export \
+  -out client_auth.pfx \
+  -inkey client_auth_password.key \
+  -in client_auth.pem \
+  -passin pass:"${PASSWORD}" \
+  -passout pass:"${PASSWORD}"
+
+openssl rsa \
+  -in client_auth_password.key \
+  -out client_auth.key \
+  -passin pass:"${PASSWORD}"
+
+rm openssl.conf
+
+# One for ldaps
+generate ldaps dc.{{ domain_realm }} sha256 "" false ca
+
 {% for info in certificate_info %}
 {% if '-' in info.algorithm | default('sha256') %}
 {% set key = info.algorithm.split('-')[0] %}

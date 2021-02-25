@@ -15,7 +15,7 @@
 
   - name: create generate_cert script
     template:
-      src: generate_cert.sh.tmpl
+      src: generate_cert.sh.j2
       dest: '{{ playbook_dir }}/build/cert_setup/generate_cert.sh'
       mode: '700'
 
@@ -32,6 +32,9 @@
     loop:
     - ca.pem
     - ca_explicit.pem
+    - client_auth.pem
+    - client_auth.key
+    - client_auth_password.key
 
   - name: generate krb5.conf for localhost configuration
     template:
@@ -69,7 +72,7 @@
     - start_socks.sh
     - stop_socks.sh
 
-- name: get Windows network adapter info
+- name: setup common Windows information
   hosts: windows
   gather_facts: no
   tags:
@@ -89,6 +92,18 @@
 
   - set_fact:
       public_connection_name: '{{ raw_connection_name.stdout | trim }}'
+
+  - name: copy CA certificate
+    win_copy:
+      src: '{{ playbook_dir }}/build/cert_setup/ca.pem'
+      dest: C:\Windows\TEMP\ca.pem
+
+  - name: import CA certificate to trusted root CA
+    win_certificate_store:
+      path: C:\Windows\TEMP\ca.pem
+      state: present
+      store_location: LocalMachine
+      store_name: Root
 
 - name: create domain controller
   hosts: DC
@@ -117,7 +132,7 @@
   - name: create domain username
     win_domain_user:
       name: '{{ domain_username }}'
-      upn: '{{ domain_username }}@{ domain_relam | upper }}'
+      upn: '{{ domain_username }}@{ domain_realm | upper }}'
       description: '{{ domain_username }} Domain Account'
       password: '{{ domain_password }}'
       password_never_expires: yes
@@ -177,6 +192,54 @@
     register: dns_record
     changed_when: dns_record.stdout|trim == "changed"
 
+  - name: copy LDAPS certificate
+    win_copy:
+      src: '{{ playbook_dir }}/build/cert_setup/ldaps.pfx'
+      dest: C:\Windows\TEMP\ldaps.pfx
+
+  - name: import LDAPS certificate to personal store
+    win_certificate_store:
+      path: C:\Windows\TEMP\ldaps.pfx
+      key_exportable: no
+      key_storage: machine
+      password: password
+      state: present
+      store_location: LocalMachine
+      store_name: My
+    register: ldaps_cert_info
+
+  - name: ensure NTDS reg path exists
+    win_regedit:
+      path: HKLM:\Software\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificate
+      state: present
+
+  - name: set up LDAPS certificate for NTDS service account
+    win_shell: |
+      $ErrorActionPreference = 'Stop'
+
+      $changed = $false
+      $thumbprint = '{{ ldaps_cert_info.thumbprints[0] }}'
+      $ntdsPath = 'HKLM:\Software\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificates'
+      $sourcePath = "HKLM:\Software\Microsoft\SystemCertificates\My\Certificates\$thumbprint"
+
+      if (-not (Test-Path -LiteralPath "$ntdsPath\$thumbprint")) {
+          Copy-Item -LiteralPath $sourcePath -Destination $ntdsPath
+
+          $dse = [adsi]'LDAP://localhost/rootDSE'
+          [void]$dse.Properties['renewServerCertificate'].Add(1)
+          $dse.CommitChanges()
+          $changed = $true
+      }
+
+      $changed
+    register: ldaps_setup
+    changed_when: ldaps_setup.stdout | trim | bool
+    vars:
+      ansible_become: yes
+      ansible_become_method: runas
+      ansible_become_user: '{{ domain_username }}@{{ domain_realm | upper }}'
+      ansible_become_pass: '{{ domain_password }}'
+
 - name: join Windows hosts to the domain
   hosts: windows:!DC
   gather_facts: no
@@ -210,6 +273,17 @@
   - windows
 
   tasks:
+  - name: create local user for certificate auth
+    win_user:
+      name: '{{ local_username }}'
+      password: '{{ local_password }}'
+      password_never_expires: yes
+      update_password: on_create
+      user_cannot_change_password: yes
+      groups:
+      - Administrators
+      state: present
+
   - name: copy certificate to the Windows host
     win_copy:
       src: '{{ playbook_dir }}/build/cert_setup'
@@ -228,6 +302,14 @@
     loop: '{{ certificate_info }}'
     loop_control:
       label: '{{ item.test }}'
+
+  - name: import Client authentication cert into Trusted People
+    win_certificate_store:
+      path: C:\Windows\TEMP\cert_setup\client_auth.pem
+      state: present
+      store_location: LocalMachine
+      store_name: TrustedPeople
+    register: client_cert_info
 
   # WinRM is frustratingly annoying to create an endpoint over multiple ports without having a separate adapter for
   # each listener so we just create a dummy loopback adapter for each one.
@@ -427,6 +509,61 @@
       }
     register: cbt_result
     changed_when: cbt_result.stdout | trim | bool
+
+  - name: make sure the Certificate and Basic auth are enabled
+    win_shell: |
+      $changed = $false
+      'Basic', 'Certificate' | ForEach-Object -Process {
+          $authPath = "WSMan:\localhost\Service\Auth\$_"
+          if ((Get-Item -LiteralPath $authPath).Value -ne 'true') {
+              Set-Item -LiteralPath $authPath -Value true
+              $changed = $true
+          }
+      }
+
+      $changed
+    register: auth_result
+    changed_when: auth_result.stdout | trim | bool
+
+  - name: set up client certificate mapping
+    win_shell: |
+      $changed = $false
+      $username = '{{ local_username }}'
+      $password = ConvertTo-SecureString -String '{{ local_password }}' -AsPlainText -Force
+      $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $username, $password
+      $userCert = Get-Item -LiteralPath Cert:\LocalMachine\TrustedPeople\{{ client_cert_info.thumbprints[0] }}
+
+      $certChain = New-Object -TypeName Security.Cryptography.X509Certificates.X509Chain
+      [void]$certChain.Build($userCert)
+      $thumbprint = $certChain.ChainElements.Certificate[-1].Thumbprint
+      $subject = "$username@localhost"
+
+      $mappings = Get-ChildItem -LiteralPath WSMan:\localhost\ClientCertificate |
+          Where-Object {
+              $mapping = $_ | Get-Item
+              "Subject=$subject" -in $mapping.Keys
+          }
+
+      if ($mappings -and "issuer=$($thumbprint)" -notin $mappings.Keys) {
+          $mappings | Remove-Item -Force -Recurse
+          $mappings = $null
+      }
+
+      if (-not $mappings) {
+          $certMapping = @{
+              Path = 'WSMan:\localhost\ClientCertificate'
+              Subject = $subject
+              Issuer = $thumbprint
+              Credential = $credential
+              Force = $true
+          }
+          New-Item @certMapping
+          $changed = $true
+      }
+
+      $changed
+    register: client_cert
+    changed_when: client_cert.stdout | trim | bool
 
 - name: create fileshare on app server
   hosts: APP

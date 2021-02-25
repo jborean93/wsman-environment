@@ -27,6 +27,8 @@ all:
     proxy_password: proxy_password
     domain_username: vagrant-domain
     domain_password: VagrantPass1
+    local_username: ansible
+    local_password: Password123!
     domain_realm: wsman.env
     socks_port: 53547
 
