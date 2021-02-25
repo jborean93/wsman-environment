@@ -28,6 +28,7 @@ all:
     domain_username: vagrant-domain
     domain_password: VagrantPass1
     domain_realm: wsman.env
+    socks_port: 53547
 
     proxy_info:
     - type: no_auth
@@ -44,7 +45,13 @@ all:
       port: 3132
 
     # Defines the HTTPS listeners to set up and metadata around the cert that backs it.
-    # The ports used are every 2nd number from the base port, e.g. 29900, 299002, 29904, etc.
+    # The public port are every 4th number starting from the base port.
+    #     29900 - Public port for 1st scenario
+    #     29901 - Internal listener used by WinRM only
+    #     29902 - Public port for proxied endpoint of 1st scenario
+    #     29903 - Internal listener for proxied WinRM only
+    #     29904 - Public port for 2nd scenario
+    #     ...
     # The default port (5986) is a self signed certificate that is not trusted at all.
     #   test: The test name to set as the friendly name prefix of the cert
     #   algorithm: The public key algorithm to use for the certificate (default: sha256)
@@ -54,20 +61,20 @@ all:
     certificate_base_port: 29900
     certificate_info:
     - test: verification
-    - test: verification-bad-ca
+    - test: verification_bad_ca
       self_signed: yes
-    - test: verification-bad-cn
+    - test: verification_bad_cn
       subject: fake-host
-    - test: verification-other-ca
+    - test: verification_other_ca
       system_ca: no
-    - test: cbt-sha1
+    - test: cbt_sha1
       algorithm: sha1
-    - test: cbt-sha256-pss
+    - test: cbt_sha256_pss
       algorithm: sha256-pss
-    - test: cbt-sha384
+    - test: cbt_sha384
       algorithm: sha384
-    - test: cbt-sha512
+    - test: cbt_sha512
       algorithm: sha512
-    - test: cbt-sha512-pss
+    - test: cbt_sha512_pss
       algorithm: sha512-pss
 

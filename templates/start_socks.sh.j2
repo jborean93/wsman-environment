@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+[ ! -d "cp" ] && mkdir cp
+
+ssh -o "ControlMaster=auto" \
+    -o "ControlPersist=no" \
+    -o "ControlPath=cp/ssh-%r@%h:%p" \
+    -CfNq \
+    -D 127.0.0.1:{{ socks_port }} \
+    -p 22 \
+    vagrant@squid.{{ domain_realm }}
+

@@ -53,8 +53,21 @@
         #!/usr/bin/env bash
 
         export KRB5_CONFIG="{{ playbook_dir }}/build/krb5.conf"
-        export HOSTALIASES="{{ playbook_dir }}/build/hosts"
       mode: '700'
+
+  - name: create ansible inventory for various test hosts
+    template:
+      src: inventory.ini.j2
+      dest: '{{ playbook_dir }}/build/inventory.ini'
+
+  - name: create socks start and stop scripts
+    template:
+      src: '{{ item }}.j2'
+      dest: '{{ playbook_dir }}/build/{{ item }}'
+      mode: '700'
+    loop:
+    - start_socks.sh
+    - stop_socks.sh
 
 - name: get Windows network adapter info
   hosts: windows
@@ -460,8 +473,8 @@
 
   - name: setup dnsmasq to forward request for domain to DC
     copy:
-      dest: /etc/NetworkManager/dnsmasq.d/{{ domain_realm }}
-      content: address=/{{ domain_realm }}/{{ hostvars['DC']['ansible_host'] }}
+      dest: /etc/NetworkManager/dnsmasq.d/{{ domain_realm }}.conf
+      content: server=/{{ domain_realm }}/{{ hostvars['DC']['ansible_host'] }}
     register: dnsmasq_conf
 
   - name: restart NetworkManager.service

@@ -1,0 +1,72 @@
+{% set http_port = (certificate_base_port + ((certificate_info | length) * 4)) %}
+[windows]
+# Used for basic testing, the standard endpoints with no funny business
+http_vanilla  ansible_port=5985
+https_vanilla  ansible_port=5986 ansible_psrp_ca_cert=ca.pem
+
+# Various channel binding token tests
+{% for n in range(1, certificate_info|length) %}
+{% set cert = certificate_info[n] %}
+{% if cert.self_signed|default(False) or cert.subject|default('') %}
+{% set cert_verify = 'ansible_psrp_cert_validation=ignore' %}
+{% elif cert.algorithm|default('') in ['sha1', 'sha512-pss'] %}
+{% set cert_verify = 'ansible_psrp_cert_validation=ignore' %}
+{% elif not cert.system_ca|default(True) %}
+{% set cert_verify = 'ansible_psrp_ca_cert=ca_explicit.pem' %}
+{% else %}
+{% set cert_verify = 'ansible_psrp_ca_cert=ca.pem' %}
+{% endif %}
+https_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}} ansible_psrp_cert_validation={{ cert_verify }}
+{% endfor %}
+
+# Tests out various proxy setups
+http  ansible_port={{ http_port }}
+https ansible_port={{ certificate_base_port }} ansible_psrp_ca_cert=ca.pem
+{% for proxy in proxy_info %}
+{% if proxy.type == 'basic' %}
+{% set proxy_url_cred = proxy_username ~ ':' ~ proxy_password ~ '@' %}
+{% elif proxy.type =='ldap' %}
+{% set proxy_url_cred = domain_username ~ ':' ~ domain_password ~ '@' %}
+{% else %}
+{% set proxy_url_cred = '' %}
+{% endif %}
+http_{{ proxy.type }}  ansible_port={{ http_port + 2 }} ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/
+https_{{ proxy.type }}  ansible_port=29900 ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/ ansible_psrp_ca_cert=ca.pem
+
+{% endfor %}
+http_proxy_sock  ansible_port={{ http_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/
+https_proxy_sock  ansible_port={{ certificate_base_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/ ansible_psrp_ca_cert=ca.pem
+
+[windows:vars]
+ansible_host=test.{{ domain_realm }}
+ansible_user={{ domain_username }}@{{ domain_realm | upper }}
+ansible_password={{ domain_password }}
+ansible_connection=psrp
+# Default is wsman which just doesn't always work
+ansible_psrp_negotiate_service=http
+
+[win_http]
+http_vanilla
+http
+{% for proxy in proxy_info %}
+http_{{ proxy.type }}
+{% endfor %}
+http_proxy_sock
+
+[win_http:vars]
+ansible_psrp_protocol=http
+
+[win_https]
+https_vanilla
+{% for n in range(1, certificate_info|length) %}
+https_{{ certificate_info[n].test }}
+{% endfor %}
+https
+{% for proxy in proxy_info %}
+https_{{ proxy.type }}
+{% endfor %}
+https_proxy_sock
+
+[win_https:vars]
+ansible_psrp_protocol=https
+

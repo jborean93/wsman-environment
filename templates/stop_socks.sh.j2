@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+ssh -o "ControlPath=cp/ssh-%r@%h:%p" \
+    -O stop \
+    -p 22 \
+    vagrant@squid.{{ domain_realm }}
+
