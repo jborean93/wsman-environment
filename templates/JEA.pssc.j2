@@ -1,0 +1,9 @@
+@{
+    SchemaVersion = '2.0.0.0'
+    GUID = '515910c5-1cf5-49fb-801e-351e103aaad1'
+    Author = 'WSMan Env'
+    SessionType = 'Default'
+    RunAsVirtualAccount = $false
+    GroupManagedServiceAccount = '{{ domain_realm.split('.')[0] | upper }}\{{ gmsa_username }}'
+}
+

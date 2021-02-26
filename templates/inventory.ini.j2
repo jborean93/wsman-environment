@@ -4,6 +4,9 @@
 http_vanilla  ansible_port=5985
 https_vanilla  ansible_port=5986 ansible_psrp_ca_cert=ca.pem
 
+# JEA and gMSA testing
+jea  ansible_port={{ http_port }} ansible_psrp_configuration_name=JEA
+
 # Various channel binding token tests
 {% for n in range(1, certificate_info|length) %}
 {% set cert = certificate_info[n] %}
@@ -58,6 +61,7 @@ ansible_psrp_negotiate_service=http
 
 [win_http]
 http_vanilla
+jea
 http
 http_ntlm
 http_kerberos

@@ -240,6 +240,45 @@
       ansible_become_user: '{{ domain_username }}@{{ domain_realm | upper }}'
       ansible_become_pass: '{{ domain_password }}'
 
+  - name: create group which can access gMSA
+    win_domain_group:
+      name: gMSAUsers
+      scope: global
+      state: present
+
+  - name: create gMSA account
+    win_shell: |
+      $ErrorActionPreference = 'Stop'
+      $changed = $false
+
+      if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {
+          $null = Add-KdsRootKey –EffectiveTime ((Get-Date).AddHours(-10))
+          $changed = $true
+      }
+
+      try {
+          $null = Get-ADServiceAccount -Identity '{{ gmsa_username }}'
+      }
+      catch {
+          $accountParams = @{
+              Name = '{{ gmsa_username }}'
+              DNSHostName = '{{ gmsa_username }}.{{ domain_realm }}'
+              KerberosEncryptionType = 'AES128,AES256'
+              PrincipalsAllowedToRetrieveManagedPassword = 'gMSAUsers'
+          }
+          New-ADServiceAccount @accountParams
+          $changed = $true
+      }
+
+      $changed
+    register: gmsa_setup
+    changed_when: gmsa_setup.stdout | trim | bool
+    vars:
+      ansible_become: yes
+      ansible_become_method: runas
+      ansible_become_user: '{{ domain_username }}@{{ domain_realm }}'
+      ansible_become_pass: '{{ domain_password }}'
+
 - name: join Windows hosts to the domain
   hosts: windows:!DC
   gather_facts: no
@@ -545,7 +584,7 @@
           }
 
       if ($mappings -and "issuer=$($thumbprint)" -notin $mappings.Keys) {
-          $mappings | Remove-Item -Force -Recurse
+          $null = $mappings | Remove-Item -Force -Recurse
           $mappings = $null
       }
 
@@ -557,13 +596,70 @@
               Credential = $credential
               Force = $true
           }
-          New-Item @certMapping
+          $null = New-Item @certMapping
           $changed = $true
       }
 
       $changed
     register: client_cert
     changed_when: client_cert.stdout | trim | bool
+
+  - name: ensure AD PowerShell module is installed
+    win_feature:
+      name:
+      - RSAT-AD-PowerShell
+
+  - name: ensure the host can install the gMSA account
+    win_domain_group_membership:
+      name: gMSAUsers
+      members:
+        - '{{ inventory_hostname }}$'
+      domain_username: '{{ domain_username }}@{{ domain_realm }}'
+      domain_password: '{{ domain_password }}'
+      state: present
+    register: gmsa_group_join
+
+  - name: reboot after joining host to gMSA group
+    win_reboot:
+    when: gmsa_group_join is changed
+
+  - name: install gMSA account
+    win_shell: Install-ADServiceAccount -Identity '{{ gmsa_username }}'
+    changed_when: false  # Not sure how to test this, running it multiple times doesn't hurt
+    vars:
+      ansible_become: yes
+      ansible_become_method: runas
+      ansible_become_user: '{{ domain_username }}@{{ domain_realm }}'
+      ansible_become_pass: '{{ domain_password }}'
+
+  - name: template JEA session configuration
+    win_template:
+      src: JEA.pssc.j2
+      dest: C:\Windows\TEMP\JEA.pssc
+
+  - name: register JEA session configuration
+    win_shell: |
+      $ErrorActionPreference = 'Stop'
+      $changed = $false
+
+      if (-not (Get-PSSessionConfiguration -Name JEA -ErrorAction SilentlyContinue)) {
+          $registerParams = @{
+              Path = 'C:\Windows\TEMP\JEA.pssc'
+              Name = 'JEA'
+              Force = $true
+              NoServiceRestart = $true
+          }
+          $null = Register-PSSessionConfiguration @registerParams
+          $changed = $true
+      }
+
+      $changed
+    register: jea_sess
+    changed_when: jea_sess.stdout | trim | bool
+
+  - name: reboot after registering JEA configuration
+    win_reboot:
+    when: jea_sess is changed
 
 - name: create fileshare on app server
   hosts: APP

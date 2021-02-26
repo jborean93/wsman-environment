@@ -29,6 +29,7 @@ all:
     domain_password: VagrantPass1
     local_username: ansible
     local_password: Password123!
+    gmsa_username: gmsa
     domain_realm: wsman.env
     socks_port: 53547
 
