@@ -638,28 +638,12 @@
       dest: C:\Windows\TEMP\JEA.pssc
 
   - name: register JEA session configuration
-    win_shell: |
-      $ErrorActionPreference = 'Stop'
-      $changed = $false
-
-      if (-not (Get-PSSessionConfiguration -Name JEA -ErrorAction SilentlyContinue)) {
-          $registerParams = @{
-              Path = 'C:\Windows\TEMP\JEA.pssc'
-              Name = 'JEA'
-              Force = $true
-              NoServiceRestart = $true
-          }
-          $null = Register-PSSessionConfiguration @registerParams
-          $changed = $true
-      }
-
-      $changed
-    register: jea_sess
-    changed_when: jea_sess.stdout | trim | bool
-
-  - name: reboot after registering JEA configuration
-    win_reboot:
-    when: jea_sess is changed
+    community.windows.win_pssession_configuration:
+      name: JEA
+      author: WSMan Env
+      session_type: default
+      run_as_virtual_account: false
+      group_managed_service_account: '{{ domain_realm.split(".")[0] | upper }}\{{ gmsa_username }}'
 
 - name: create fileshare on app server
   hosts: APP

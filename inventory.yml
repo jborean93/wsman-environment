@@ -15,6 +15,7 @@ all:
         ansible_port: 5985
         ansible_connection: psrp
         ansible_psrp_auth: ntlm
+        ansible_psrp_read_timeout: 60
     linux:
       hosts:
         SQUID:
