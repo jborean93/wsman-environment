@@ -54,7 +54,7 @@ EOL
     openssl x509 \
         -req \
         -in "${NAME}.csr" \
-        -"-${KEY}" \
+        "-${KEY}" \
         -out "${NAME}.pem" \
         -days 365 \
         -extfile openssl.conf \
@@ -155,6 +155,13 @@ rm openssl.conf
 
 # One for ldaps
 generate ldaps dc.{{ domain_realm }} sha256 "" false ca
+
+# One for squid
+generate squid squid.{{ domain_realm }} sha256 "" false ca
+openssl rsa \
+    -in squid.key \
+    -out squid.key \
+    -passin pass:"${PASSWORD}"
 
 {% for info in certificate_info %}
 {% if '-' in info.algorithm | default('sha256') %}

@@ -2,95 +2,91 @@
 [windows]
 # Used for basic testing, the standard endpoints with no funny business
 http_vanilla  ansible_port=5985
-https_vanilla  ansible_port=5986 ansible_psrp_ca_cert=ca.pem
+https_vanilla  ansible_port=5986
 
 # JEA and gMSA testing
-jea  ansible_port={{ http_port }} ansible_psrp_configuration_name=JEA
+jea  ansible_psrp_configuration_name=JEA
 
 # Various channel binding token tests
-{% for n in range(1, certificate_info|length) %}
+{% for n in range(1, certificate_info | length) %}
 {% set cert = certificate_info[n] %}
-{% if cert.self_signed|default(False) or cert.subject|default('') %}
-{% set cert_verify = 'ansible_psrp_cert_validation=ignore' %}
-{% elif cert.algorithm|default('') in ['sha1', 'sha512-pss'] %}
-{% set cert_verify = 'ansible_psrp_cert_validation=ignore' %}
+{% if cert.self_signed | default(False) or cert.subject | default('') or cert.algorithms | default('') in ['sha1', 'sha512-pss'] %}
+{% set cert_options = ' ansible_psrp_cert_validation=ignore' %}
 {% elif not cert.system_ca|default(True) %}
-{% set cert_verify = 'ansible_psrp_ca_cert=ca_explicit.pem' %}
-{% else %}
-{% set cert_verify = 'ansible_psrp_ca_cert=ca.pem' %}
+{% set cert_options = ' ansible_psrp_ca_cert=ca_explicit.pem' %}
 {% endif %}
-https_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}} ansible_psrp_cert_validation={{ cert_verify }}
+https_cbt_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}}{{ cert_options | default('') }}
 {% endfor %}
 
-# Tests out various proxy setups
-http  ansible_port={{ http_port }}
-http_ntlm  ansible_port={{ http_port }} ansible_psrp_auth=ntlm
-http_kerberos  ansible_port={{ http_port }} ansible_psrp_auth=kerberos
-http_credssp  ansible_port={{ http_port }} ansible_psrp_auth=credssp
+# HTTP and Proxy tests
+{% for scheme in ['http', 'https'] %}
+{% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] if not (scheme == 'http' and auth_protocol == 'cert') %}
+{{ scheme }}_{{ auth_protocol }}_none_none
 
-https ansible_port={{ certificate_base_port }} ansible_psrp_ca_cert=ca.pem
-https_cert  ansible_port={{ certificate_base_port }} ansible_psrp_auth=certificate ansible_psrp_ca_cert=ca.pem ansible_psrp_certificate_pem=client_auth.pem ansible_psrp_certificate_key_pem=client_auth.key
-https_basic_auth  ansible_port={{ certificate_base_port }} ansible_psrp_auth=basic ansible_user={{ local_username }} ansible_password={{ local_password }} ansible_psrp_ca_cert=ca.pem
-https_ntlm  ansible_port={{ certificate_base_port }} ansible_psrp_auth=ntlm ansible_psrp_ca_cert=ca.pem
-https_kerberos  ansible_port={{ certificate_base_port }} ansible_psrp_auth=kerberos ansible_psrp_ca_cert=ca.pem
-https_credssp  ansible_port={{ certificate_base_port }} ansible_psrp_auth=credssp ansible_psrp_ca_cert=ca.pem
 {% for proxy in proxy_info %}
-{% if proxy.type == 'basic' %}
-{% set proxy_url_cred = proxy_username ~ ':' ~ proxy_password ~ '@' %}
-{% elif proxy.type =='ldap' %}
-{% set proxy_url_cred = domain_username ~ ':' ~ domain_password ~ '@' %}
-{% else %}
-{% set proxy_url_cred = '' %}
-{% endif %}
-http_{{ proxy.type }}  ansible_port={{ http_port + 2 }} ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/
-https_{{ proxy.type }}  ansible_port=29900 ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/ ansible_psrp_ca_cert=ca.pem
-https_{{ proxy.type }}_cert  ansible_port=29900 ansible_psrp_proxy=http://{{ proxy_url_cred }}squid.{{ domain_realm }}:{{ proxy.port }}/ ansible_psrp_auth=certificate ansible_psrp_ca_cert=ca.pem ansible_psrp_certificate_pem=client_auth.pem ansible_psrp_certificate_key_pem=client_auth.key
+{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{% set proxy_protocol = {'socks': 'socks'}.get(proxy_scheme, proxy_scheme) %}
+{% set proxy_url_cred = {'basic': proxy_username ~ ':' ~ proxy_password ~ '@', 'ldap': domain_username ~ ':' ~ domain_password ~ '@'}.get(proxy.auth, '') %}
+{% set proxy_port = {'http': ':' ~ proxy.port, 'https': ':' ~ ((proxy.port | int) + 1)}.get(proxy_scheme, '') %}
+{{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }} ansible_psrp_proxy={{ proxy_protocol }}://{{ proxy_url_cred }}squid.{{ domain_realm }}{{ proxy_port }}/
+{% endfor %}
 
 {% endfor %}
-http_proxy_sock  ansible_port={{ http_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/
-https_proxy_sock  ansible_port={{ certificate_base_port }} ansible_psrp_proxy=socks5://localhost:{{ socks_port }}/ ansible_psrp_ca_cert=ca.pem
-
-
+{% endfor %}
+{% endfor %}
 [windows:vars]
 ansible_host=test.{{ domain_realm }}
+ansible_connection=psrp
 ansible_user={{ domain_username }}@{{ domain_realm | upper }}
 ansible_password={{ domain_password }}
-ansible_connection=psrp
-# Default is wsman which just doesn't always work
 ansible_psrp_negotiate_service=http
+{% for scheme in ['http', 'https'] %}
 
-[win_http]
-http_vanilla
+[{{ scheme }}]
+{{ scheme }}_vanilla
+{% if scheme == 'http' %}
 jea
-http
-http_ntlm
-http_kerberos
-http_credssp
-{% for proxy in proxy_info %}
-http_{{ proxy.type }}
-{% endfor %}
-http_proxy_sock
-
-[win_http:vars]
-ansible_psrp_protocol=http
-
-[win_https]
-https_vanilla
+{% else %}
 {% for n in range(1, certificate_info|length) %}
-https_{{ certificate_info[n].test }}
+https_cbt_{{ certificate_info[n].test }}
 {% endfor %}
-https
-https_cert
-https_basic_auth
-https_ntlm
-https_kerberos
-https_credssp
+{% endif %}
+{% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] if not (scheme == 'http' and auth_protocol == 'cert') %}
+{{ scheme }}_{{ auth_protocol }}_none_none
 {% for proxy in proxy_info %}
-https_{{ proxy.type }}
-https_{{ proxy.type }}_cert
+{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }}
 {% endfor %}
-https_proxy_sock
+{% endfor %}
+{% endfor %}
 
-[win_https:vars]
-ansible_psrp_protocol=https
+[{{ scheme }}:vars]
+ansible_psrp_port={{ (scheme == 'http') | ternary(http_port, certificate_base_port) }}
+ansible_psrp_protocol={{ scheme }}
+{% if scheme == 'https' %}
+ansible_psrp_ca_cert=ca.pem
+{% endif %}
+{% endfor %}
+{% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] %}
+
+[{{ auth_protocol }}]
+{% for scheme in ['http', 'https'] if not (scheme == 'http' and auth_protocol == 'cert') %}
+{{ scheme }}_{{ auth_protocol }}_none_none
+{% for proxy in proxy_info %}
+{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+
+[{{ auth_protocol }}:vars]
+ansible_psrp_auth={{ {'basic': 'basic', 'cert': 'certificate', 'ntlm': 'ntlm', 'kerb': 'kerberos', 'nego': 'negotiate', 'credssp': 'credssp' }[auth_protocol] }}
+{% if auth_protocol == 'basic' %}
+ansible_user={{ local_username }}
+ansible_password={{ local_password }}
+{% elif auth_protocol == 'cert' %}
+ansible_psrp_certificate_pem=client_auth.pem
+ansible_psrp_certificate_key_pem=client_auth.key
+{% endif %}
+{% endfor %}
 

@@ -24,7 +24,7 @@ acl Safe_ports port 591         # filemaker
 acl Safe_ports port 777         # multiling http
 acl CONNECT method CONNECT
 
-{% if auth != 'none' %}
+{% if auth != 'anon' %}
 
 {% if auth == 'basic' %}
 auth_param basic program /usr/lib64/squid/basic_ncsa_auth /etc/squid/passwd
@@ -72,7 +72,7 @@ http_access deny manager
 # INSERT YOUR OWN RULE(S) HERE TO ALLOW ACCESS FROM YOUR CLIENTS
 #
 
-pid_filename /var/run/squid-{{ port }}.pid
+pid_filename /var/run/squid-{{ http_port }}.pid
 
 # Example rule allowing access from your local networks.
 # Adapt localnet in the ACL section to list your (internal) IP networks
@@ -84,7 +84,9 @@ http_access allow localhost
 http_access deny all
 
 # Squid normally listens to port 3128
-http_port {{ port }}
+http_port {{ http_port }}
+
+https_port {{ https_port }} cert=/etc/squid/squid.pem key=/etc/squid/squid.key
 
 # Uncomment and adjust the following to add a disk cache directory.
 #cache_dir ufs /var/spool/squid 100 16 256

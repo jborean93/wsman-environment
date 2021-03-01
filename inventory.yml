@@ -21,6 +21,7 @@ all:
         SQUID:
           ansible_host: 192.168.10.20
           vagrant_box: centos/7
+          ansible_ssh_common_args: -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
   vars:
     ansible_user: vagrant
     ansible_password: vagrant
@@ -34,19 +35,16 @@ all:
     domain_realm: wsman.env
     socks_port: 53547
 
+    # Will create a http port and https port (+1) for the following authentication protocols
     proxy_info:
-    - type: no_auth
-      auth: none
+    - auth: anon
       port: 3129
-    - type: basic
-      auth: basic
-      port: 3130
-    - type: ldap
-      auth: ldap
+    - auth: basic
       port: 3131
-    - type: kerb
-      auth: kerb
-      port: 3132
+    - auth: ldap
+      port: 3133
+    - auth: kerb
+      port: 3135
 
     # Defines the HTTPS listeners to set up and metadata around the cert that backs it.
     # The public port are every 4th number starting from the base port.

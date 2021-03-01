@@ -632,11 +632,6 @@
       ansible_become_user: '{{ domain_username }}@{{ domain_realm }}'
       ansible_become_pass: '{{ domain_password }}'
 
-  - name: template JEA session configuration
-    win_template:
-      src: JEA.pssc.j2
-      dest: C:\Windows\TEMP\JEA.pssc
-
   - name: register JEA session configuration
     community.windows.win_pssession_configuration:
       name: JEA
@@ -719,6 +714,16 @@
       dest: /etc/squid/squid.keytab
       group: squid
 
+  - name: copy squid certificate
+    copy:
+      src: '{{ playbook_dir }}/build/cert_setup/{{ item }}'
+      dest: /etc/squid/{{ item }}
+      group: squid
+      mode: '600'
+    loop:
+    - squid.key
+    - squid.pem
+
   - name: create htpasswd file for basic auth
     htpasswd:
       create: yes
@@ -731,25 +736,26 @@
   - name: template out Squid config files
     template:
       src: squid.conf.j2
-      dest: /etc/squid/squid.{{ item.type }}.conf
+      dest: /etc/squid/squid.{{ item.auth }}.conf
       group: squid
     vars:
       auth: '{{ item.auth }}'
-      port: '{{ item.port }}'
+      http_port: '{{ item.port }}'
+      https_port: '{{ item.port|int + 1 }}'
     loop: '{{ proxy_info }}'
 
   - name: template out squid service units
     template:
       src: systemd_unit.service.j2
-      dest: /etc/systemd/system/squid_{{ item.type }}.service
+      dest: /etc/systemd/system/squid_{{ item.auth }}.service
     vars:
-      description: Squid caching proxy - {{ item.type }}
-      config_file: /etc/squid/squid.{{ item.type }}.conf
+      description: Squid caching proxy - {{ item.auth }}
+      config_file: /etc/squid/squid.{{ item.auth }}.conf
     loop: '{{ proxy_info }}'
 
   - name: start proxy services
     systemd:
-      name: squid_{{ item.type }}.service
+      name: squid_{{ item.auth }}.service
       enabled: yes
       state: started
     loop: '{{ proxy_info }}'
