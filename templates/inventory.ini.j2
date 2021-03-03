@@ -37,9 +37,6 @@ https_cbt_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}}{{ c
 [windows:vars]
 ansible_host=test.{{ domain_realm }}
 ansible_connection=psrp
-ansible_user={{ domain_username }}@{{ domain_realm | upper }}
-ansible_password={{ domain_password }}
-ansible_psrp_negotiate_service=http
 {% for scheme in ['http', 'https'] %}
 
 [{{ scheme }}]
@@ -84,9 +81,14 @@ ansible_psrp_auth={{ {'basic': 'basic', 'cert': 'certificate', 'ntlm': 'ntlm', '
 {% if auth_protocol == 'basic' %}
 ansible_user={{ local_username }}
 ansible_password={{ local_password }}
+ansible_psrp_message_encryption=never
 {% elif auth_protocol == 'cert' %}
 ansible_psrp_certificate_pem=client_auth.pem
 ansible_psrp_certificate_key_pem=client_auth.key
+{% else %}
+ansible_user={{ domain_username }}@{{ domain_realm | upper }}
+ansible_password={{ domain_password }}
+ansible_psrp_negotiate_service=http
 {% endif %}
 {% endfor %}
 

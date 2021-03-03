@@ -564,6 +564,18 @@
     register: auth_result
     changed_when: auth_result.stdout | trim | bool
 
+  - name: allow unencrypted data for testing basic auth over HTTP
+    win_shell: |
+      $allowPath = 'WSMan:\localhost\Service\AllowUnencrypted'
+      if ((Get-Item -LiteralPath $allowPath).Value -ne 'True') {
+          Set-Item -LiteralPath $allowPath -Value True
+          $true
+      } else {
+          $false
+      }
+    register: allow_unencrypted_result
+    changed_when: allow_unencrypted_result.stdout | trim bool
+
   - name: set up client certificate mapping
     win_shell: |
       $changed = $false
