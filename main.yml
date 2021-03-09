@@ -182,58 +182,36 @@
       flat: yes
 
   - name: create DNS A record for proxy host
-    win_shell: |
-      $realm = '{{ domain_realm }}'
-      $address = '{{ hostvars["SQUID"]["ansible_host"] }}'
-      if (-not (Get-DnsServerResourceRecord -Name squid -ZoneName $realm -RRType 'A' -ErrorAction SilentlyContinue)) {
-        Add-DnsServerResourceRecordA -Name squid -ZoneName $realm -IPv4Address $address
-        "changed"
-      }
-    register: dns_record
-    changed_when: dns_record.stdout|trim == "changed"
+    win_dns_record:
+      name: squid
+      type: A
+      value: '{{ hostvars["SQUID"]["ansible_host"] }}'
+      zone: '{{ domain_realm }}'
+      state: present
 
   - name: copy LDAPS certificate
     win_copy:
       src: '{{ playbook_dir }}/build/cert_setup/ldaps.pfx'
       dest: C:\Windows\TEMP\ldaps.pfx
 
-  - name: import LDAPS certificate to personal store
+  - name: import LDAPS certificate
     win_certificate_store:
       path: C:\Windows\TEMP\ldaps.pfx
+      password: password
       key_exportable: no
       key_storage: machine
-      password: password
       state: present
-      store_location: LocalMachine
+      store_type: service
+      store_location: NTDS
       store_name: My
     register: ldaps_cert_info
 
-  - name: ensure NTDS reg path exists
-    win_regedit:
-      path: HKLM:\Software\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificate
-      state: present
-
-  - name: set up LDAPS certificate for NTDS service account
+  - name: register LDAPS certificate
     win_shell: |
-      $ErrorActionPreference = 'Stop'
-
-      $changed = $false
-      $thumbprint = '{{ ldaps_cert_info.thumbprints[0] }}'
-      $ntdsPath = 'HKLM:\Software\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificates'
-      $sourcePath = "HKLM:\Software\Microsoft\SystemCertificates\My\Certificates\$thumbprint"
-
-      if (-not (Test-Path -LiteralPath "$ntdsPath\$thumbprint")) {
-          Copy-Item -LiteralPath $sourcePath -Destination $ntdsPath
-
-          $dse = [adsi]'LDAP://localhost/rootDSE'
-          [void]$dse.Properties['renewServerCertificate'].Add(1)
-          $dse.CommitChanges()
-          $changed = $true
-      }
-
-      $changed
-    register: ldaps_setup
-    changed_when: ldaps_setup.stdout | trim | bool
+      $dse = [adsi]'LDAP://localhost/rootDSE'
+      [void]$dse.Properties['renewServerCertificate'].Add(1)
+      $dse.CommitChanges()
+      $changed = $true
     vars:
       ansible_become: yes
       ansible_become_method: runas
@@ -574,7 +552,7 @@
           $false
       }
     register: allow_unencrypted_result
-    changed_when: allow_unencrypted_result.stdout | trim bool
+    changed_when: allow_unencrypted_result.stdout | trim | bool
 
   - name: set up client certificate mapping
     win_shell: |
