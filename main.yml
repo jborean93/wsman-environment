@@ -630,6 +630,29 @@
       run_as_virtual_account: false
       group_managed_service_account: '{{ domain_realm.split(".")[0] | upper }}\{{ gmsa_username }}'
 
+  - name: install PowerShell Core
+    win_chocolatey:
+      name:
+      - powershell-core
+      state: present
+
+  - name: set up SSH subsystem for PowerShell Core remoting
+    win_lineinfile:
+      path: C:\ProgramData\ssh\sshd_config
+      line: Subsystem {{ item }} c:/progra~1/powershell/7/pwsh.exe -sshs -NoLogo
+      insertafter: ^Subsystem.*  # Try to group them with other Subsystem entries
+      state: present
+    loop:
+    - powershell
+    - pwsh  # Allows us to test a custom subsystem name
+    register: sshd_pwsh
+
+  - name: restart SSH service after configuring PowerShell subsystem
+    win_service:
+      name: sshd
+      state: restarted
+    when: sshd_pwsh is changed
+
 - name: create fileshare on app server
   hosts: APP
   gather_facts: no
