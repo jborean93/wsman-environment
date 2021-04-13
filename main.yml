@@ -46,6 +46,7 @@
       dest: '{{ playbook_dir }}/build/hosts'
       content: |
         {{ hostvars['DC']['ansible_host'] }} dc.{{ domain_realm }}
+        {{ hostvars['APP']['ansible_host'] }} app.{{ domain_realm }}
         {{ hostvars['TEST']['ansible_host'] }} test.{{ domain_realm }}
         {{ hostvars['SQUID']['ansible_host'] }} squid.{{ domain_realm }}
 
@@ -62,6 +63,8 @@
     template:
       src: inventory.ini.j2
       dest: '{{ playbook_dir }}/build/inventory.ini'
+    tags:
+    - jordan
 
   - name: create socks start and stop scripts
     template:
@@ -772,4 +775,10 @@
       enabled: yes
       state: started
     loop: '{{ proxy_info }}'
+
+  - name: add hosts entry for remote-res to test
+    lineinfile:
+      path: /etc/hosts
+      line: '{{ hostvars["TEST"]["ansible_host"] }}  remote-res.{{ domain_realm }}'
+      state: present
 

@@ -34,7 +34,7 @@ distinguished_name = req_distinguished_name
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:${SUBJECT}
+subjectAltName = DNS:${SUBJECT},DNS:remote-res.{{ domain_realm }}
 EOL
 
     echo "Generating ${NAME} signed cert"

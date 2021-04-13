@@ -22,13 +22,19 @@ https_cbt_{{ cert.test }}  ansible_port={{ certificate_base_port + (n * 4)}}{{ c
 {% for scheme in ['http', 'https'] %}
 {% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] if not (scheme == 'http' and auth_protocol == 'cert') %}
 {{ scheme }}_{{ auth_protocol }}_none_none
+{% if auth_protocol == 'cert' %}
+{{ scheme }}_certpass_none_none ansible_psrp_certificate_key_pem=client_auth_password.key ansible_psrp_certificate_password=password
+{% endif %}
 
 {% for proxy in proxy_info %}
-{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
-{% set proxy_protocol = {'socks': 'socks'}.get(proxy_scheme, proxy_scheme) %}
+{% for proxy_scheme in ['http', 'https', 'socks5'] if not (proxy_scheme == 'socks5' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{% set proxy_host = {'socks5': '127.0.0.1'}.get(proxy_scheme, 'squid.' ~ domain_realm) %}
 {% set proxy_url_cred = {'basic': proxy_username ~ ':' ~ proxy_password ~ '@', 'ldap': domain_username ~ ':' ~ domain_password ~ '@'}.get(proxy.auth, '') %}
-{% set proxy_port = {'http': ':' ~ proxy.port, 'https': ':' ~ ((proxy.port | int) + 1)}.get(proxy_scheme, '') %}
-{{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }} ansible_psrp_proxy={{ proxy_protocol }}://{{ proxy_url_cred }}squid.{{ domain_realm }}{{ proxy_port }}/
+{% set proxy_port = {'http': ':' ~ proxy.port, 'https': ':' ~ ((proxy.port | int) + 1), 'socks5': ':' ~ socks_port}.get(proxy_scheme, '') %}
+{{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }} ansible_psrp_proxy={{ proxy_scheme }}://{{ proxy_url_cred }}{{ proxy_host }}{{ proxy_port }}/
+{% if proxy_scheme == 'socks5' %}
+{{ scheme }}_{{ auth_protocol }}_socks5h_{{ proxy.auth }} ansible_psrp_proxy=socks5h://{{ proxy_host }}{{ proxy_port }}/ ansible_host=remote-res.{{ domain_realm }}
+{% endif %}
 {% endfor %}
 
 {% endfor %}
@@ -50,8 +56,11 @@ https_cbt_{{ certificate_info[n].test }}
 {% endif %}
 {% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] if not (scheme == 'http' and auth_protocol == 'cert') %}
 {{ scheme }}_{{ auth_protocol }}_none_none
+{% if auth_protocol == 'cert' %}
+{{ scheme }}_certpass_none_none
+{% endif %}
 {% for proxy in proxy_info %}
-{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{% for proxy_scheme in ['http', 'https', 'socks5', 'socks5h'] if not (proxy_scheme.startswith('socks5') and proxy.auth in ['basic', 'ldap', 'kerb']) %}
 {{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }}
 {% endfor %}
 {% endfor %}
@@ -69,8 +78,11 @@ ansible_psrp_ca_cert=ca.pem
 [{{ auth_protocol }}]
 {% for scheme in ['http', 'https'] if not (scheme == 'http' and auth_protocol == 'cert') %}
 {{ scheme }}_{{ auth_protocol }}_none_none
+{% if auth_protocol == 'cert' %}
+{{ scheme }}_certpass_none_none
+{% endif %}
 {% for proxy in proxy_info %}
-{% for proxy_scheme in ['http', 'https', 'socks'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
+{% for proxy_scheme in ['http', 'https', 'socks5'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
 {{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }}
 {% endfor %}
 {% endfor %}
