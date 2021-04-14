@@ -63,8 +63,6 @@
     template:
       src: inventory.ini.j2
       dest: '{{ playbook_dir }}/build/inventory.ini'
-    tags:
-    - jordan
 
   - name: create socks and WinRM config scripts
     template:
