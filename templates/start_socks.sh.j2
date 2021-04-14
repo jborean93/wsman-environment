@@ -2,9 +2,15 @@
 
 [ ! -d "cp" ] && mkdir cp
 
-ssh -o "ControlMaster=auto" \
+sshpass \
+    -p vagrant \
+    ssh \
+    -o "ControlMaster=auto" \
     -o "ControlPersist=no" \
     -o "ControlPath=cp/ssh-%r@%h:%p" \
+    -o "StrictHostKeyChecking=no" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "LogLevel=ERROR" \
     -CfNq \
     -D 127.0.0.1:{{ socks_port }} \
     -p 22 \

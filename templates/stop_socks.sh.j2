@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 
-ssh -o "ControlPath=cp/ssh-%r@%h:%p" \
+sshpass \
+    -p vagrant \
+    ssh \
+    -o "ControlPath=cp/ssh-%r@%h:%p" \
+    -o "StrictHostKeyChecking=no" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "LogLevel=ERROR" \
     -O stop \
     -p 22 \
     vagrant@squid.{{ domain_realm }}

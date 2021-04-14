@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+# Restarts the WinRM and IP Helper service which might be required after starting a host
+
+sshpass \
+    -p vagrant \
+    ssh \
+    -o "StrictHostKeyChecking=no" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "LogLevel=ERROR" \
+    -p 22 \
+    vagrant@test.{{ domain_realm }} \
+    powershell.exe -Command "Restart-Service -Name iphlpsvc, winrm"
+

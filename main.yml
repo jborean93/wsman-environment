@@ -66,12 +66,13 @@
     tags:
     - jordan
 
-  - name: create socks start and stop scripts
+  - name: create socks and WinRM config scripts
     template:
       src: '{{ item }}.j2'
       dest: '{{ playbook_dir }}/build/{{ item }}'
       mode: '700'
     loop:
+    - reset_winrm.sh
     - start_socks.sh
     - stop_socks.sh
 
