@@ -142,11 +142,6 @@
       groups:
       - Domain Admins
       state: present
-    register: domain_user_res
-    # ADWS won't be online after the first reboot, just keep on trying
-    retries: 30
-    delay: 15
-    until: domain_user_res is successful
 
   - name: create proxy principal account
     win_domain_user:
@@ -280,6 +275,7 @@
       domain_admin_password: '{{ domain_password }}'
       state: domain
     register: domain_join
+    async: 120  # This step is a bit tempermental with the connection, use async to lessen the impact
 
   - name: reboot after joining domain
     win_reboot:
