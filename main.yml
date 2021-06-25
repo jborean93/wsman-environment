@@ -71,6 +71,7 @@
       mode: '700'
     loop:
     - reset_winrm.sh
+    - shutdown.sh
     - start_socks.sh
     - stop_socks.sh
 

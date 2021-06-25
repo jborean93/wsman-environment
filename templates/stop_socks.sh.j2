@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 sshpass \
-    -p vagrant \
+    -p {{ ansible_password }} \
     ssh \
     -o "ControlPath=cp/ssh-%r@%h:%p" \
     -o "StrictHostKeyChecking=no" \
@@ -9,5 +9,5 @@ sshpass \
     -o "LogLevel=ERROR" \
     -O stop \
     -p 22 \
-    vagrant@squid.{{ domain_realm }}
+    {{ ansible_user }}@squid.{{ domain_realm }}
 

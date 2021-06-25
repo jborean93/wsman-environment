@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Shutdown all hosts safely
+{% for host in (groups['windows'] | difference(['DC'])) + ['DC'] %}
+
+sshpass \
+    -p {{ ansible_password }} \
+    ssh \
+    -o "StrictHostKeyChecking=no" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "LogLevel=ERROR" \
+    -p 22 \
+    {{ ansible_user }}@{{ host }}.{{ domain_realm }} \
+    shutdown.exe /s /t 5
+{% endfor %}
+
+sshpass \
+    -p {{ ansible_password }} \
+    ssh \
+    -o "StrictHostKeyChecking=no" \
+    -o "UserKnownHostsFile=/dev/null" \
+    -o "LogLevel=ERROR" \
+    -p 22 \
+    {{ ansible_user }}@squid.{{ domain_realm }} \
+    sudo shutdown now
+

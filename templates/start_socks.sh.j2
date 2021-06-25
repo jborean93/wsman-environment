@@ -3,7 +3,7 @@
 [ ! -d "cp" ] && mkdir cp
 
 sshpass \
-    -p vagrant \
+    -p {{ ansible_password }} \
     ssh \
     -o "ControlMaster=auto" \
     -o "ControlPersist=no" \
@@ -14,5 +14,5 @@ sshpass \
     -CfNq \
     -D 127.0.0.1:{{ socks_port }} \
     -p 22 \
-    vagrant@squid.{{ domain_realm }}
+    {{ ansible_user }}@squid.{{ domain_realm }}
 
