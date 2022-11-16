@@ -54,7 +54,7 @@ all:
     #     29903 - Internal listener for proxied WinRM only
     #     29904 - Public port for 2nd scenario
     #     ...
-    # The default port (5986) is a self signed certificate that is not trusted at all.
+    # The default port (5986) also uses the first test (verification) that is issued by the CA.
     #   test: The test name to set as the friendly name prefix of the cert
     #   algorithm: The public key algorithm to use for the certificate (default: sha256)
     #   subject: Explicit subject to set for the certificate (default is the FQDN of the host)

@@ -13,7 +13,8 @@ Vagrant.configure("2") do |config|
         srv.vm.hostname = server
         srv.vm.network :private_network,
           :ip => host_details['ansible_host'],
-          :libvirt__network_name => 'winrm-test'
+          :libvirt__network_name => 'winrm-test',
+          :libvirt__domain_name => inventory['all']['vars']['domain_realm']
 
         srv.vm.provider :libvirt do |l|
           l.memory = 4096

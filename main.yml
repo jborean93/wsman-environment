@@ -205,11 +205,11 @@
     register: ldaps_cert_info
 
   - name: register LDAPS certificate
-    win_shell: |
-      $dse = [adsi]'LDAP://localhost/rootDSE'
-      [void]$dse.Properties['renewServerCertificate'].Add(1)
-      $dse.CommitChanges()
-      $changed = $true
+    ansible.windows.win_powershell:
+      script: |
+        $dse = [adsi]'LDAP://localhost/rootDSE'
+        [void]$dse.Properties['renewServerCertificate'].Add(1)
+        $dse.CommitChanges()
     vars:
       ansible_become: yes
       ansible_become_method: runas
@@ -223,32 +223,34 @@
       state: present
 
   - name: create gMSA account
-    win_shell: |
-      $ErrorActionPreference = 'Stop'
-      $changed = $false
+    ansible.windows.win_powershell:
+      script: |
+        param([string]$UserName, [string]$Realm)
+        $ErrorActionPreference = 'Stop'
+        $Ansible.Changed = $false
 
-      if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {
-          $null = Add-KdsRootKey –EffectiveTime ((Get-Date).AddHours(-10))
-          $changed = $true
-      }
+        if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) {
+            $null = Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
+            $Ansible.Changed = $true
+        }
 
-      try {
-          $null = Get-ADServiceAccount -Identity '{{ gmsa_username }}'
-      }
-      catch {
-          $accountParams = @{
-              Name = '{{ gmsa_username }}'
-              DNSHostName = '{{ gmsa_username }}.{{ domain_realm }}'
-              KerberosEncryptionType = 'AES128,AES256'
-              PrincipalsAllowedToRetrieveManagedPassword = 'gMSAUsers'
-          }
-          New-ADServiceAccount @accountParams
-          $changed = $true
-      }
+        try {
+            $null = Get-ADServiceAccount -Identity $UserName
+        }
+        catch {
+            $accountParams = @{
+                Name = $UserName
+                DNSHostName = "$UserName.$Realm"
+                KerberosEncryptionType = 'AES128,AES256'
+                PrincipalsAllowedToRetrieveManagedPassword = 'gMSAUsers'
+            }
+            New-ADServiceAccount @accountParams
+            $Ansible.Changed = $true
+        }
+      parameters:
+        UserName: '{{ gmsa_username }}'
+        Realm: '{{ domain_realm }}'
 
-      $changed
-    register: gmsa_setup
-    changed_when: gmsa_setup.stdout | trim | bool
     vars:
       ansible_become: yes
       ansible_become_method: runas
@@ -326,6 +328,53 @@
       store_location: LocalMachine
       store_name: TrustedPeople
     register: client_cert_info
+
+  - name: set default HTTPS listener to trusted CA certificate
+    ansible.windows.win_powershell:
+      script: |
+        param([string]$Thumbprint)
+
+        $ErrorActionPreference = 'Stop'
+        $Ansible.Changed = $false
+
+        $listener = Get-ChildItem -Path WSMan:\localhost\Listener |
+            Where-Object { $_.Keys -contains 'Transport=HTTPS' } |
+            ForEach-Object -Process {
+                $details = Get-ChildItem -Path $_.PSPath
+                [PSCustomObject]@{
+                    PSPath = $_.PSPath
+                    Address = ($details | Where-Object Name -eq Address).Value
+                    Port = ($details | Where-Object Name -eq Port).Value
+                    CertificateThumbprint = ($details | Where-Object Name -eq CertificateThumbprint).Value
+                }
+            } |
+            Where-Object Port -eq 5986
+
+        # If the listener already exists but is for a different cert or IP then remove it.
+        if ($listener -and ($listener.CertificateThumbprint -ne $thumbprint)) {
+            Remove-Item -LiteralPath $listener.PSPath -Force -Recurse
+            $listener = $null
+            $Ansible.Changed = $true
+        }
+
+        if (-not $listener) {
+            $wsmanParams = @{
+                ResourceURI = 'winrm/config/Listener'
+                SelectorSet = @{
+                    Address = '*'
+                    Transport = 'HTTPS'
+                }
+                ValueSet = @{
+                    Port = 5986
+                    CertificateThumbprint = $Thumbprint
+                }
+            }
+
+            $null = New-WSManInstance @wsmanParams
+            $Ansible.Changed = $true
+        }
+      parameters:
+        Thumbprint: '{{ winrm_cert_info.results[0].thumbprints[0] }}'
 
   # WinRM is frustratingly annoying to create an endpoint over multiple ports without having a separate adapter for
   # each listener so we just create a dummy loopback adapter for each one.
@@ -515,83 +564,86 @@
     loop: '{{ winrm_rules.results | map(attribute="stdout_lines") | flatten | list }}'
 
   - name: make sure the CBT level is set to Strict
-    win_shell: |
-      $cbtPath = 'WSMan:\localhost\Service\Auth\CbtHardeningLevel'
-      if ((Get-Item -LiteralPath $cbtPath).Value -ne 'Strict') {
-          Set-Item -LiteralPath $cbtPath -Value Strict
-          $true
-      } else {
-        $false
-      }
-    register: cbt_result
-    changed_when: cbt_result.stdout | trim | bool
+    ansible.windows.win_powershell:
+      script: |
+        $ErrorActionPreference = 'Stop'
+
+        $cbtPath = 'WSMan:\localhost\Service\Auth\CbtHardeningLevel'
+        if ((Get-Item -LiteralPath $cbtPath).Value -ne 'Strict') {
+            Set-Item -LiteralPath $cbtPath -Value Strict
+        } else {
+            $Ansible.Changed = $false
+        }
 
   - name: make sure the Certificate and Basic auth are enabled
-    win_shell: |
-      $changed = $false
-      'Basic', 'Certificate' | ForEach-Object -Process {
-          $authPath = "WSMan:\localhost\Service\Auth\$_"
-          if ((Get-Item -LiteralPath $authPath).Value -ne 'true') {
-              Set-Item -LiteralPath $authPath -Value true
-              $changed = $true
-          }
-      }
+    ansible.windows.win_powershell:
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $Ansible.Changed = $false
 
-      $changed
-    register: auth_result
-    changed_when: auth_result.stdout | trim | bool
+        'Basic', 'Certificate' | ForEach-Object -Process {
+            $authPath = "WSMan:\localhost\Service\Auth\$_"
+            if ((Get-Item -LiteralPath $authPath).Value -ne 'true') {
+                Set-Item -LiteralPath $authPath -Value true
+                $Ansible.Changed = $true
+            }
+        }
 
   - name: allow unencrypted data for testing basic auth over HTTP
-    win_shell: |
-      $allowPath = 'WSMan:\localhost\Service\AllowUnencrypted'
-      if ((Get-Item -LiteralPath $allowPath).Value -ne 'True') {
-          Set-Item -LiteralPath $allowPath -Value True
-          $true
-      } else {
-          $false
-      }
-    register: allow_unencrypted_result
-    changed_when: allow_unencrypted_result.stdout | trim | bool
+    ansible.windows.win_powershell:
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $Ansible.Changed = $false
+
+        $allowPath = 'WSMan:\localhost\Service\AllowUnencrypted'
+        if ((Get-Item -LiteralPath $allowPath).Value -ne 'True') {
+            Set-Item -LiteralPath $allowPath -Value True
+            $Ansible.Changed = $true
+        }
 
   - name: set up client certificate mapping
-    win_shell: |
-      $changed = $false
-      $username = '{{ local_username }}'
-      $password = ConvertTo-SecureString -String '{{ local_password }}' -AsPlainText -Force
-      $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $username, $password
-      $userCert = Get-Item -LiteralPath Cert:\LocalMachine\TrustedPeople\{{ client_cert_info.thumbprints[0] }}
+    ansible.windows.win_powershell:
+      script: |
+        param([string]$UserName, [string]$Password, [string]$Thumbprint)
 
-      $certChain = New-Object -TypeName Security.Cryptography.X509Certificates.X509Chain
-      [void]$certChain.Build($userCert)
-      $thumbprint = $certChain.ChainElements.Certificate[-1].Thumbprint
-      $subject = "$username@localhost"
+        $Ansible.Changed = $false
 
-      $mappings = Get-ChildItem -LiteralPath WSMan:\localhost\ClientCertificate |
-          Where-Object {
-              $mapping = $_ | Get-Item
-              "Subject=$subject" -in $mapping.Keys
-          }
+        $Password = ConvertTo-SecureString -String $Password -AsPlainText -Force
+        $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $UserName, $Password
+        $userCert = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$Thumbprint"
 
-      if ($mappings -and "issuer=$($thumbprint)" -notin $mappings.Keys) {
-          $null = $mappings | Remove-Item -Force -Recurse
-          $mappings = $null
-      }
+        $certChain = New-Object -TypeName Security.Cryptography.X509Certificates.X509Chain
+        [void]$certChain.Build($userCert)
+        $thumbprint = $certChain.ChainElements.Certificate[-1].Thumbprint
+        $subject = "$UserName@localhost"
 
-      if (-not $mappings) {
-          $certMapping = @{
-              Path = 'WSMan:\localhost\ClientCertificate'
-              Subject = $subject
-              Issuer = $thumbprint
-              Credential = $credential
-              Force = $true
-          }
-          $null = New-Item @certMapping
-          $changed = $true
-      }
+        $mappings = Get-ChildItem -LiteralPath WSMan:\localhost\ClientCertificate |
+            Where-Object {
+                $mapping = $_ | Get-Item
+                "Subject=$subject" -in $mapping.Keys
+            }
 
-      $changed
-    register: client_cert
-    changed_when: client_cert.stdout | trim | bool
+        if ($mappings -and "issuer=$($thumbprint)" -notin $mappings.Keys) {
+            $null = $mappings | Remove-Item -Force -Recurse
+            $mappings = $null
+            $Ansible.Changed = $true
+        }
+
+        if (-not $mappings) {
+            $certMapping = @{
+                Path = 'WSMan:\localhost\ClientCertificate'
+                Subject = $subject
+                Issuer = $Thumbprint
+                Credential = $credential
+                Force = $true
+            }
+            $null = New-Item @certMapping
+            $Ansible.Changed = $true
+        }
+      parameters:
+        UserName: '{{ local_username }}'
+        Password: '{{ local_password }}'
+        Thumbprint: '{{ client_cert_info.thumbprints[0] }}'
 
   - name: ensure AD PowerShell module is installed
     win_feature:
@@ -602,7 +654,7 @@
     win_domain_group_membership:
       name: gMSAUsers
       members:
-        - '{{ inventory_hostname }}$'
+      - '{{ inventory_hostname }}$'
       domain_username: '{{ domain_username }}@{{ domain_realm }}'
       domain_password: '{{ domain_password }}'
       state: present
@@ -613,8 +665,14 @@
     when: gmsa_group_join is changed
 
   - name: install gMSA account
-    win_shell: Install-ADServiceAccount -Identity '{{ gmsa_username }}'
-    changed_when: false  # Not sure how to test this, running it multiple times doesn't hurt
+    ansible.windows.win_powershell:
+      script: |
+        param($UserName)
+
+        $Ansible.Changed = $false  # Not sure how to test this, running it multiple times doesn't hurt
+        Install-ADServiceAccount -Identity $UserName
+      parameters:
+        UserName: '{{ gmsa_username }}'
     vars:
       ansible_become: yes
       ansible_become_method: runas
@@ -628,12 +686,6 @@
       session_type: default
       run_as_virtual_account: false
       group_managed_service_account: '{{ domain_realm.split(".")[0] | upper }}\{{ gmsa_username }}'
-
-  - name: install PowerShell Core
-    win_chocolatey:
-      name:
-      - powershell-core
-      state: present
 
   - name: set up SSH subsystem for PowerShell Core remoting
     win_lineinfile:
