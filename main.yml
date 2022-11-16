@@ -687,15 +687,12 @@
       run_as_virtual_account: false
       group_managed_service_account: '{{ domain_realm.split(".")[0] | upper }}\{{ gmsa_username }}'
 
-  - name: set up SSH subsystem for PowerShell Core remoting
+  - name: set up custom SSH subsystem for PowerShell Core remoting
     win_lineinfile:
       path: C:\ProgramData\ssh\sshd_config
-      line: Subsystem {{ item }} c:/progra~1/powershell/7/pwsh.exe -sshs -NoLogo
+      line: Subsystem pwsh c:/progra~1/powershell/7/pwsh.exe -sshs -NoLogo
       insertafter: ^Subsystem.*  # Try to group them with other Subsystem entries
       state: present
-    loop:
-    - powershell
-    - pwsh  # Allows us to test a custom subsystem name
     register: sshd_pwsh
 
   - name: restart SSH service after configuring PowerShell subsystem
@@ -732,7 +729,7 @@
 
   tasks:
   - name: install Kerberos packages
-    yum:
+    dnf:
       name:
       - dnsmasq
       - krb5-devel
@@ -817,6 +814,14 @@
       config_file: /etc/squid/squid.{{ item.auth }}.conf
     loop: '{{ proxy_info }}'
 
+  - name: add firewalld rule for Squid endpoints
+    firewalld:
+      port: '{{ item.port }}-{{ item.port|int + 1 }}/tcp'
+      permanent: true
+      immediate: true
+      state: enabled
+    loop: '{{ proxy_info }}'
+
   - name: start proxy services
     systemd:
       name: squid_{{ item.auth }}.service
@@ -829,4 +834,3 @@
       path: /etc/hosts
       line: '{{ hostvars["TEST"]["ansible_host"] }}  remote-res.{{ domain_realm }}'
       state: present
-

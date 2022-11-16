@@ -20,7 +20,7 @@ all:
       hosts:
         SQUID:
           ansible_host: 192.168.10.20
-          vagrant_box: centos/7
+          vagrant_box: generic/rocky9
           ansible_ssh_common_args: -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
   vars:
     ansible_user: vagrant
