@@ -606,15 +606,16 @@
       script: |
         param([string]$UserName, [string]$Password, [string]$Thumbprint)
 
+        $ErrorActionPreference = 'Stop'
         $Ansible.Changed = $false
 
-        $Password = ConvertTo-SecureString -String $Password -AsPlainText -Force
-        $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $UserName, $Password
+        $secPassword = ConvertTo-SecureString -String $Password -AsPlainText -Force
+        $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $UserName, $secPassword
         $userCert = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$Thumbprint"
 
         $certChain = New-Object -TypeName Security.Cryptography.X509Certificates.X509Chain
         [void]$certChain.Build($userCert)
-        $thumbprint = $certChain.ChainElements.Certificate[-1].Thumbprint
+        $caThumbprint = $certChain.ChainElements.Certificate[-1].Thumbprint
         $subject = "$UserName@localhost"
 
         $mappings = Get-ChildItem -LiteralPath WSMan:\localhost\ClientCertificate |
@@ -623,7 +624,7 @@
                 "Subject=$subject" -in $mapping.Keys
             }
 
-        if ($mappings -and "issuer=$($thumbprint)" -notin $mappings.Keys) {
+        if ($mappings -and "issuer=$($caThumbprint)" -notin $mappings.Keys) {
             $null = $mappings | Remove-Item -Force -Recurse
             $mappings = $null
             $Ansible.Changed = $true
@@ -633,7 +634,7 @@
             $certMapping = @{
                 Path = 'WSMan:\localhost\ClientCertificate'
                 Subject = $subject
-                Issuer = $Thumbprint
+                Issuer = $caThumbprint
                 Credential = $credential
                 Force = $true
             }

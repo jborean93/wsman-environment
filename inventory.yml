@@ -4,13 +4,13 @@ all:
       hosts:
         DC:
           ansible_host: 192.168.10.10
-          vagrant_box: jborean93/WindowsServer2019
+          vagrant_box: jborean93/WindowsServer2022
         APP:
           ansible_host: 192.168.10.11
-          vagrant_box: jborean93/WindowsServer2019
+          vagrant_box: jborean93/WindowsServer2022
         TEST:
           ansible_host: 192.168.10.12
-          vagrant_box: jborean93/WindowsServer2019
+          vagrant_box: jborean93/WindowsServer2022
       vars:
         ansible_port: 5985
         ansible_connection: psrp
