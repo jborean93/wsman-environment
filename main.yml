@@ -493,7 +493,6 @@
                   'portproxy',
                   'add',
                   'v4tov4',
-                  'listenaddress={{ ansible_host }}',
                   "listenport=$($_.ExternalPort)",
                   "connectaddress=$address",
                   "connectport=$($_.ListenerPort)"
