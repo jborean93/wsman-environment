@@ -135,7 +135,7 @@
   - name: create domain username
     win_domain_user:
       name: '{{ domain_username }}'
-      upn: '{{ domain_username }}@{ domain_realm | upper }}'
+      upn: '{{ domain_username }}@{{ domain_realm | upper }}'
       description: '{{ domain_username }} Domain Account'
       password: '{{ domain_password }}'
       password_never_expires: yes
