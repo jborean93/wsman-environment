@@ -291,6 +291,25 @@
   - windows
 
   tasks:
+  - name: trust host for delegation
+    ansible.windows.win_powershell:
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $Ansible.Changed = $false
+
+        $UF_TRUSTED_FOR_DELEGATION = 0x80000
+        $uac = (Get-ADComputer -Identity $env:COMPUTERNAME -Properties userAccountControl).userAccountControl
+
+        if (($uac -band $UF_TRUSTED_FOR_DELEGATION) -eq 0) {
+            Set-ADAccountControl -Identity "$env:COMPUTERNAME`$" -TrustedForDelegation $true
+            $Ansible.Changed = $true
+        }
+    become: yes
+    become_method: runas
+    vars:
+      ansible_become_user: '{{ ansible_user }}'
+      ansible_become_pass: '{{ ansible_password }}'
+
   - name: create local user for certificate auth
     win_user:
       name: '{{ local_username }}'
