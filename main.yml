@@ -1,32 +1,32 @@
 - name: setup local configuration and scratch information
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
 
   tasks:
   - name: create build directory
-    file:
+    ansible.builtin.file:
       path: '{{ playbook_dir }}/build'
       state: directory
 
   - name: create cert output folder
-    file:
+    ansible.builtin.file:
       path: '{{ playbook_dir }}/build/cert_setup'
       state: directory
 
   - name: create generate_cert script
-    template:
+    ansible.builtin.template:
       src: generate_cert.sh.j2
       dest: '{{ playbook_dir }}/build/cert_setup/generate_cert.sh'
       mode: '700'
 
   - name: generate CA and WinRM certificate
-    shell: ./generate_cert.sh {{ ('TEST.' ~ domain_realm) | quote }} password
+    ansible.builtin.shell: ./generate_cert.sh {{ ('TEST.' ~ domain_realm) | quote }} password
     args:
       creates: '{{ playbook_dir }}/build/cert_setup/complete.txt'
       chdir: '{{ playbook_dir }}/build/cert_setup'
 
   - name: copy CA certificate to root of build
-    copy:
+    ansible.builtin.copy:
       src: '{{ playbook_dir }}/build/cert_setup/{{ item }}'
       dest: '{{ playbook_dir }}/build/{{ item }}'
     loop:
@@ -37,12 +37,12 @@
     - client_auth_password.key
 
   - name: generate krb5.conf for localhost configuration
-    template:
+    ansible.builtin.template:
       src: krb5.conf.j2
       dest: '{{ playbook_dir }}/build/krb5.conf'
 
   - name: create custom hosts file for localhost
-    copy:
+    ansible.builtin.copy:
       dest: '{{ playbook_dir }}/build/hosts'
       content: |
         {{ hostvars['DC']['ansible_host'] }} dc.{{ domain_realm }}
@@ -51,7 +51,7 @@
         {{ hostvars['SQUID']['ansible_host'] }} squid.{{ domain_realm }}
 
   - name: create environment activation script
-    copy:
+    ansible.builtin.copy:
       dest: '{{ playbook_dir }}/build/activate.sh'
       content: |
         #!/usr/bin/env bash
@@ -60,12 +60,12 @@
       mode: '700'
 
   - name: create ansible inventory for various test hosts
-    template:
+    ansible.builtin.template:
       src: inventory.ini.j2
       dest: '{{ playbook_dir }}/build/inventory.ini'
 
   - name: create socks and WinRM config scripts
-    template:
+    ansible.builtin.template:
       src: '{{ item }}.j2'
       dest: '{{ playbook_dir }}/build/{{ item }}'
       mode: '700'
@@ -77,32 +77,39 @@
 
 - name: setup common Windows information
   hosts: windows
-  gather_facts: no
+  gather_facts: false
   tags:
   - windows
 
   tasks:
-  - name: get network connection names
-    win_shell: |
-      Get-CimInstance -ClassName Win32_NetworkAdapter -Filter "Netenabled='True'" | ForEach-Object -Process {
-        $config = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "Index='$($_.Index)'"
-        if ($config.IPAddress -contains '{{ ansible_host }}') {
-          $_.NetConnectionID
-        }
-      }
-    changed_when: false
-    register: raw_connection_name
+  - name: get network connection for private adapter
+    ansible.windows.win_powershell:
+      parameters:
+        IPAddress: '{{ ansible_host }}'
+      script: |
+        param($IPAddress)
 
-  - set_fact:
-      public_connection_name: '{{ raw_connection_name.stdout | trim }}'
+        $Ansible.Changed = $false
+
+        foreach ($instance in (Get-CimInstance -ClassName Win32_NetworkAdapter -Filter "Netenabled='True'")) {
+            $config = Get-CimInstance -ClassName WIn32_NetworkAdapterConfiguration -Filter "Index = '$($instance.Index)'"
+            if ($config.IPAddress -contains $IPAddress) {
+                $instance.NetConnectionID
+            }
+        }
+    register: public_connection_name_raw
+    failed_when: public_connection_name_raw.output | count != 1
+
+  - ansible.builtin.set_fact:
+      public_connection_name: '{{ public_connection_name_raw.output[0] }}'
 
   - name: copy CA certificate
-    win_copy:
+    ansible.windows.win_copy:
       src: '{{ playbook_dir }}/build/cert_setup/ca.pem'
       dest: C:\Windows\TEMP\ca.pem
 
   - name: import CA certificate to trusted root CA
-    win_certificate_store:
+    ansible.windows.win_certificate_store:
       path: C:\Windows\TEMP\ca.pem
       state: present
       store_location: LocalMachine
@@ -110,60 +117,54 @@
 
 - name: create domain controller
   hosts: DC
-  gather_facts: no
+  gather_facts: false
   tags:
   - windows
 
   tasks:
   - name: set the DNS for the internal adapters to localhost
-    win_dns_client:
+    ansible.windows.win_dns_client:
       adapter_names:
       - '{{ public_connection_name }}'
       dns_servers:
       - 127.0.0.1
 
   - name: ensure domain exists and DC is promoted as a domain controller
-    win_domain:
+    microsoft.ad.domain:
       dns_domain_name: '{{ domain_realm }}'
       safe_mode_password: '{{ domain_password }}'
-    register: domain_setup_res
-
-  - name: reboot after DC install
-    win_reboot:
-    when: domain_setup_res.reboot_required
+      reboot: true
 
   - name: create domain username
-    win_domain_user:
+    microsoft.ad.user:
       name: '{{ domain_username }}'
       upn: '{{ domain_username }}@{{ domain_realm | upper }}'
       description: '{{ domain_username }} Domain Account'
       password: '{{ domain_password }}'
-      password_never_expires: yes
+      password_never_expires: true
       update_password: when_changed
       groups:
-      - Domain Admins
+        add:
+        - Domain Admins
       state: present
 
   - name: create proxy principal account
-    win_domain_user:
+    microsoft.ad.user:
       name: squid
       upn: squid@{{ domain_realm | upper }}
       password: '{{ domain_password }}'
       attributes:
-        msDS-SupportedEncryptionTypes: 16  # AES256
-      password_never_expires: yes
-      user_cannot_change_password: yes
+        add:
+          servicePrincipalName: HTTP/squid.{{ domain_realm }}
+        set:
+          msDS-SupportedEncryptionTypes: 16  # AES256
+      password_never_expires: true
+      user_cannot_change_password: true
       state: present
       update_password: on_create
 
-  - name: register SPN for proxy principal
-    win_command: setspn -S HTTP/squid.{{ domain_realm }} squid
-    register: spn_create
-    changed_when: '"Updated object" in spn_create.stdout'
-    failed_when: spn_create is failed and "Duplicate SPN found" not in spn_create.stdout
-
   - name: create keytab for proxy principal
-    win_command: >
+    ansible.windows.win_command: >
       ktpass -out C:\Users\{{ ansible_user }}\Documents\proxy.keytab
       -princ HTTP/squid.{{ domain_realm }}@{{ domain_realm | upper }}
       -mapUser squid@{{ domain_realm | upper }}
@@ -174,13 +175,13 @@
       creates: C:\Users\{{ ansible_user }}\Documents\proxy.keytab
 
   - name: fetch proxy keytab
-    fetch:
+    ansible.builtin.fetch:
       src: C:\Users\{{ ansible_user }}\Documents\proxy.keytab
       dest: '{{ playbook_dir }}/build/proxy.keytab'
-      flat: yes
+      flat: true
 
   - name: create DNS A record for proxy host
-    win_dns_record:
+    community.windows.win_dns_record:
       name: squid
       type: A
       value: '{{ hostvars["SQUID"]["ansible_host"] }}'
@@ -188,15 +189,15 @@
       state: present
 
   - name: copy LDAPS certificate
-    win_copy:
+    ansible.windows.win_copy:
       src: '{{ playbook_dir }}/build/cert_setup/ldaps.pfx'
       dest: C:\Windows\TEMP\ldaps.pfx
 
   - name: import LDAPS certificate
-    win_certificate_store:
+    ansible.windows.win_certificate_store:
       path: C:\Windows\TEMP\ldaps.pfx
       password: password
-      key_exportable: no
+      key_exportable: false
       key_storage: machine
       state: present
       store_type: service
@@ -210,14 +211,15 @@
         $dse = [adsi]'LDAP://localhost/rootDSE'
         [void]$dse.Properties['renewServerCertificate'].Add(1)
         $dse.CommitChanges()
+    when: ldaps_cert_info is changed
     vars:
-      ansible_become: yes
+      ansible_become: true
       ansible_become_method: runas
       ansible_become_user: '{{ domain_username }}@{{ domain_realm | upper }}'
       ansible_become_pass: '{{ domain_password }}'
 
   - name: create group which can access gMSA
-    win_domain_group:
+    microsoft.ad.group:
       name: gMSAUsers
       scope: global
       state: present
@@ -252,84 +254,66 @@
         Realm: '{{ domain_realm }}'
 
     vars:
-      ansible_become: yes
+      ansible_become: true
       ansible_become_method: runas
       ansible_become_user: '{{ domain_username }}@{{ domain_realm }}'
       ansible_become_pass: '{{ domain_password }}'
 
 - name: join Windows hosts to the domain
   hosts: windows:!DC
-  gather_facts: no
+  gather_facts: false
   tags:
   - windows
 
   tasks:
   - name: set DNS for the private adapter to point to the DC
-    win_dns_client:
+    ansible.windows.win_dns_client:
       adapter_names:
       - '{{ public_connection_name }}'
       dns_servers:
       - '{{ hostvars["DC"]["ansible_host"] }}'
 
   - name: join host to the domain
-    win_domain_membership:
+    microsoft.ad.membership:
       dns_domain_name: '{{ domain_realm }}'
       domain_admin_user: '{{ domain_username }}@{{ domain_realm | upper }}'
       domain_admin_password: '{{ domain_password }}'
       state: domain
-    register: domain_join
-    async: 120  # This step is a bit tempermental with the connection, use async to lessen the impact
-
-  - name: reboot after joining domain
-    win_reboot:
-    when: domain_join.reboot_required
+      reboot: true
 
 - name: setup test WinRM host
   hosts: TEST
-  gather_facts: no
+  gather_facts: false
   tags:
   - windows
 
   tasks:
   - name: trust host for delegation
-    ansible.windows.win_powershell:
-      script: |
-        param ($Identity)
-
-        $ErrorActionPreference = 'Stop'
-        $Ansible.Changed = $false
-
-        $UF_TRUSTED_FOR_DELEGATION = 0x80000
-        $uac = (Get-ADComputer -Identity $Identity -Properties userAccountControl).userAccountControl
-
-        if (($uac -band $UF_TRUSTED_FOR_DELEGATION) -eq 0) {
-            Set-ADAccountControl -Identity $Identity -TrustedForDelegation $true
-            $Ansible.Changed = $true
-        }
-      parameters:
-        Identity: '{{ inventory_hostname }}$'
+    microsoft.ad.computer:
+      identity: '{{ inventory_hostname }}$'
+      trusted_for_delegation: true
     delegate_to: DC
 
   - name: create local user for certificate auth
-    win_user:
+    ansible.windows.win_user:
       name: '{{ local_username }}'
       password: '{{ local_password }}'
-      password_never_expires: yes
+      password_never_expires: true
       update_password: on_create
-      user_cannot_change_password: yes
+      user_cannot_change_password: true
       groups:
       - Administrators
       state: present
 
   - name: copy certificate to the Windows host
-    win_copy:
+    ansible.windows.win_copy:
       src: '{{ playbook_dir }}/build/cert_setup'
       dest: C:\Windows\TEMP\
 
   - name: import WinRM certs to the certificate store
-    win_certificate_store:
+    ansible.windows.win_certificate_store:
       path: C:\Windows\TEMP\cert_setup\{{ item.test }}.pfx
-      key_exportable: no
+      key_exportable: false
       key_storage: machine
       password: password
       state: present
@@ -341,7 +325,7 @@
       label: '{{ item.test }}'
 
   - name: import Client authentication cert into Trusted People
-    win_certificate_store:
+    ansible.windows.win_certificate_store:
       path: C:\Windows\TEMP\cert_setup\client_auth.pem
       state: present
       store_location: LocalMachine
@@ -399,7 +383,7 @@
   # each listener so we just create a dummy loopback adapter for each one.
   # We create a duplicate interface for each scenario for the proxy only connections
   - name: create dummy loopback adapters for WinRM endpoints
-    win_device:
+    ansible.legacy.win_device:
       path: '%WinDir%\Inf\netloop.inf'
       hardware_id: '*msloop'
       name: 'Microsoft KM-TEST Loopback Adapter{{ (item|int == 0) | ternary("", " #" ~ (item|int + 1)) }}'
@@ -412,7 +396,7 @@
   # to the internal port the listener is set to use. This means WinRM thinks the request came over that address when
   # it actually came from the normal external address.
   - name: setup WinRM listeners for each certificate and the friendly name of those certs
-    win_shell: |
+    ansible.windows.win_shell: |
       $ErrorActionPreference = 'Stop'
       $changed = $false
 
@@ -527,7 +511,7 @@
     loop: '{{ range(0, (certificate_info | length) + 1, 1) | list }}'  # 1 for the HTTP listener
 
   - name: build list of WinRM ports
-    set_fact:
+    ansible.builtin.set_fact:
       winrm_ports: >-
         {{
           winrm_ports | default([
@@ -542,7 +526,7 @@
     loop: '{{ range(0, certificate_info | length, 1) | list }}'
 
   - name: get list of firewall rules for our WinRM ports
-    win_shell: |
+    ansible.windows.win_shell: |
       Get-NetFirewallPortFilter | Where-Object LocalPort -eq {{ item.port }} | ForEach-Object -Process {
         (Get-NetFirewallRule -AssociatedNetFirewallPortFilter $_).DisplayName
       } | Sort-Object -Unique | Where-Object { -not $_.StartsWith('WinRM Test Rule') }
@@ -551,32 +535,32 @@
     register: winrm_rules
 
   - name: create allow all WinRM firewall rules
-    win_firewall_rule:
+    community.windows.win_firewall_rule:
       name: WinRM Test Rule {{ item.name }}
       localport: '{{ item.port }}'
       action: allow
       direction: in
       protocol: tcp
-      enabled: yes
+      enabled: true
       state: present
     when: item.name.endswith('-public')
     loop: '{{ winrm_ports }}'
 
   - name: create allow only proxy host WinRM firewall rules
-    win_firewall_rule:
+    community.windows.win_firewall_rule:
       name: WinRM Test Rule {{ item.name }}
       localport: '{{ item.port }}'
       remoteip: '{{ hostvars["SQUID"]["ansible_host"] }}'
       action: allow
       direction: in
       protocol: tcp
-      enabled: yes
+      enabled: true
       state: present
     when: item.name.endswith('-proxy')
     loop: '{{ winrm_ports }}'
 
   - name: remove builtin WinRM firewall rules
-    win_firewall_rule:
+    community.windows.win_firewall_rule:
       name: '{{ item }}'
       state: absent
     loop: '{{ winrm_rules.results | map(attribute="stdout_lines") | flatten | list }}'
@@ -665,38 +649,24 @@
         Thumbprint: '{{ client_cert_info.thumbprints[0] }}'
 
   - name: ensure AD PowerShell module is installed
-    win_feature:
+    ansible.windows.win_feature:
       name:
       - RSAT-AD-PowerShell
 
   - name: ensure the host can install the gMSA account
-    win_domain_group_membership:
-      name: gMSAUsers
+    microsoft.ad.group:
+      identity: gMSAUsers
       members:
-      - '{{ inventory_hostname }}$'
+        add:
+        - '{{ inventory_hostname }}$'
       domain_username: '{{ domain_username }}@{{ domain_realm }}'
       domain_password: '{{ domain_password }}'
       state: present
     register: gmsa_group_join
 
   - name: reboot after joining host to gMSA group
-    win_reboot:
+    ansible.windows.win_reboot:
     when: gmsa_group_join is changed
-
-  - name: install gMSA account
-    ansible.windows.win_powershell:
-      script: |
-        param($UserName)
-
-        $Ansible.Changed = $false  # Not sure how to test this, running it multiple times doesn't hurt
-        Install-ADServiceAccount -Identity $UserName
-      parameters:
-        UserName: '{{ gmsa_username }}'
-    vars:
-      ansible_become: yes
-      ansible_become_method: runas
-      ansible_become_user: '{{ domain_username }}@{{ domain_realm }}'
-      ansible_become_pass: '{{ domain_password }}'
 
   - name: register JEA session configuration
     community.windows.win_pssession_configuration:
@@ -707,7 +677,7 @@
       group_managed_service_account: '{{ domain_realm.split(".")[0] | upper }}\{{ gmsa_username }}'
 
   - name: set up custom SSH subsystem for PowerShell Core remoting
-    win_lineinfile:
+    community.windows.win_lineinfile:
       path: C:\ProgramData\ssh\sshd_config
       line: Subsystem pwsh c:/progra~1/powershell/7/pwsh.exe -sshs -NoLogo
       insertafter: ^Subsystem.*  # Try to group them with other Subsystem entries
@@ -715,25 +685,25 @@
     register: sshd_pwsh
 
   - name: restart SSH service after configuring PowerShell subsystem
-    win_service:
+    ansible.windows.win_service:
       name: sshd
       state: restarted
     when: sshd_pwsh is changed
 
 - name: create fileshare on app server
   hosts: APP
-  gather_facts: no
+  gather_facts: false
   tags:
   - windows
 
   tasks:
   - name: create share folder
-    win_file:
+    ansible.windows.win_file:
       path: C:\share
       state: directory
 
   - name: create share of folder
-    win_share:
+    ansible.windows.win_share:
       name: share
       path: C:\share
       full: Everyone
@@ -741,14 +711,14 @@
 
 - name: setup Linux proxy host
   hosts: linux
-  become: yes
-  gather_facts: no
+  become: true
+  gather_facts: false
   tags:
   - linux
 
   tasks:
   - name: install Kerberos packages
-    dnf:
+    ansible.builtin.dnf:
       name:
       - dnsmasq
       - krb5-devel
@@ -756,7 +726,7 @@
       state: present
 
   - name: setup NetworkManager to use dnsmasq
-    copy:
+    ansible.builtin.copy:
       dest: /etc/NetworkManager/conf.d/dns.conf
       content: |
         [main]
@@ -764,24 +734,24 @@
     register: networkman_conf
 
   - name: setup dnsmasq to forward request for domain to DC
-    copy:
+    ansible.builtin.copy:
       dest: /etc/NetworkManager/dnsmasq.d/{{ domain_realm }}.conf
       content: server=/{{ domain_realm }}/{{ hostvars['DC']['ansible_host'] }}
     register: dnsmasq_conf
 
   - name: restart NetworkManager.service
-    service:
+    ansible.builtin.service:
       name: NetworkManager
       state: restarted
     when: networkman_conf is changed or dnsmasq_conf is changed
 
   - name: template krb5.conf file
-    template:
+    ansible.builtin.template:
       src: krb5.conf.j2
       dest: /etc/krb5.conf
 
   - name: setup Squid packages
-    yum:
+    ansible.builtin.dnf:
       name:
       - squid
       - httpd-tools
@@ -789,13 +759,13 @@
       state: present
 
   - name: copy squid keytab file
-    copy:
+    ansible.builtin.copy:
       src: '{{ playbook_dir }}/build/proxy.keytab'
       dest: /etc/squid/squid.keytab
       group: squid
 
   - name: copy squid certificate
-    copy:
+    ansible.builtin.copy:
       src: '{{ playbook_dir }}/build/cert_setup/{{ item }}'
       dest: /etc/squid/{{ item }}
       group: squid
@@ -805,8 +775,8 @@
     - squid.pem
 
   - name: create htpasswd file for basic auth
-    htpasswd:
-      create: yes
+    community.general.htpasswd:
+      create: true
       name: '{{ proxy_username }}'
       password: '{{ proxy_password }}'
       path: /etc/squid/passwd
@@ -814,7 +784,7 @@
       state: present
 
   - name: template out Squid config files
-    template:
+    ansible.builtin.template:
       src: squid.conf.j2
       dest: /etc/squid/squid.{{ item.auth }}.conf
       group: squid
@@ -825,7 +795,7 @@
     loop: '{{ proxy_info }}'
 
   - name: template out squid service units
-    template:
+    ansible.builtin.template:
       src: systemd_unit.service.j2
       dest: /etc/systemd/system/squid_{{ item.auth }}.service
     vars:
@@ -834,7 +804,7 @@
     loop: '{{ proxy_info }}'
 
   - name: add firewalld rule for Squid endpoints
-    firewalld:
+    ansible.posix.firewalld:
       port: '{{ item.port }}-{{ item.port|int + 1 }}/tcp'
       permanent: true
       immediate: true
@@ -842,14 +812,14 @@
     loop: '{{ proxy_info }}'
 
   - name: start proxy services
-    systemd:
+    ansible.builtin.systemd:
       name: squid_{{ item.auth }}.service
-      enabled: yes
+      enabled: true
       state: started
     loop: '{{ proxy_info }}'
 
   - name: add hosts entry for remote-res to test
-    lineinfile:
+    ansible.builtin.lineinfile:
       path: /etc/hosts
       line: '{{ hostvars["TEST"]["ansible_host"] }}  remote-res.{{ domain_realm }}'
       state: present

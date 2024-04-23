@@ -58,17 +58,17 @@ all:
     #   test: The test name to set as the friendly name prefix of the cert
     #   algorithm: The public key algorithm to use for the certificate (default: sha256)
     #   subject: Explicit subject to set for the certificate (default is the FQDN of the host)
-    #   self_signed: Whether the host is self signed or signed by a common CA (default: no)
-    #   system_ca: Whether to sign it with the common system CA or use the explicit one (default: yes)
+    #   self_signed: Whether the host is self signed or signed by a common CA (default: false)
+    #   system_ca: Whether to sign it with the common system CA or use the explicit one (default: true)
     certificate_base_port: 29900
     certificate_info:
     - test: verification
     - test: verification_bad_ca
-      self_signed: yes
+      self_signed: true
     - test: verification_bad_cn
       subject: fake-host
     - test: verification_other_ca
-      system_ca: no
+      system_ca: false
     - test: cbt_sha1
       algorithm: sha1
     - test: cbt_sha256_pss
