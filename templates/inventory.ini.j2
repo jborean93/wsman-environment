@@ -67,7 +67,7 @@ https_cbt_{{ certificate_info[n].test }}
 {% endfor %}
 
 [{{ scheme }}:vars]
-ansible_psrp_port={{ (scheme == 'http') | ternary(http_port, certificate_base_port) }}
+ansible_port={{ (scheme == 'http') | ternary(http_port, certificate_base_port) }}
 ansible_psrp_protocol={{ scheme }}
 {% if scheme == 'https' %}
 ansible_psrp_ca_cert=ca.pem
@@ -80,6 +80,13 @@ ansible_psrp_ca_cert=ca.pem
 {{ scheme }}_{{ auth_protocol }}_none_none
 {% if auth_protocol == 'cert' %}
 {{ scheme }}_certpass_none_none
+{% elif auth_protocol == 'nego' and scheme == 'https' %}
+{% for n in range(1, certificate_info | length) %}
+{% set cert = certificate_info[n] %}
+{% if cert.test.startswith("cbt_") %}
+{{ scheme }}_cbt_{{ cert.test }}
+{% endif %}
+{% endfor %}
 {% endif %}
 {% for proxy in proxy_info %}
 {% for proxy_scheme in ['http', 'https', 'socks5'] if not (proxy_scheme == 'socks' and proxy.auth in ['basic', 'ldap', 'kerb']) %}
