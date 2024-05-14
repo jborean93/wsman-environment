@@ -59,6 +59,10 @@ https_cbt_{{ certificate_info[n].test }}
 {% if auth_protocol == 'cert' %}
 {{ scheme }}_certpass_none_none
 {% endif %}
+{% endfor %}
+
+[{{ scheme }}_proxy]
+{% for auth_protocol in ['basic', 'cert', 'ntlm', 'kerb', 'nego', 'credssp'] if not (scheme == 'http' and auth_protocol == 'cert') %}
 {% for proxy in proxy_info %}
 {% for proxy_scheme in ['http', 'https', 'socks5', 'socks5h'] if not (proxy_scheme.startswith('socks5') and proxy.auth in ['basic', 'ldap', 'kerb']) %}
 {{ scheme }}_{{ auth_protocol }}_{{ proxy_scheme }}_{{ proxy.auth }}
@@ -68,6 +72,13 @@ https_cbt_{{ certificate_info[n].test }}
 
 [{{ scheme }}:vars]
 ansible_port={{ (scheme == 'http') | ternary(http_port, certificate_base_port) }}
+ansible_psrp_protocol={{ scheme }}
+{% if scheme == 'https' %}
+ansible_psrp_ca_cert=ca.pem
+{% endif %}
+
+[{{ scheme }}_proxy:vars]
+ansible_port={{ (scheme == 'http') | ternary(http_port, certificate_base_port) + 2 }}
 ansible_psrp_protocol={{ scheme }}
 {% if scheme == 'https' %}
 ansible_psrp_ca_cert=ca.pem
@@ -110,4 +121,3 @@ ansible_password={{ domain_password }}
 ansible_psrp_negotiate_service=http
 {% endif %}
 {% endfor %}
-
