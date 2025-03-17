@@ -59,10 +59,16 @@
         export KRB5_CONFIG="{{ playbook_dir }}/build/krb5.conf"
       mode: '700'
 
-  - name: create ansible inventory for various test hosts
-    ansible.builtin.template:
-      src: inventory.ini.j2
-      dest: '{{ playbook_dir }}/build/inventory.ini'
+  - name: generate inventory data
+    ansible.legacy.generate_inventory:
+    register: inventory_data
+    tags:
+    - inventory
+
+  - name: create ansible inventory file
+    ansible.builtin.copy:
+      content: '{{ inventory_data.inventory | to_nice_yaml }}'
+      dest: '{{ playbook_dir }}/build/inventory.yml'
     tags:
     - inventory
 
@@ -74,8 +80,8 @@
     loop:
     - reset_winrm.sh
     - shutdown.sh
-    - start_socks.sh
-    - stop_socks.sh
+    - start_ssh_socks.sh
+    - stop_ssh_socks.sh
 
 - name: setup common Windows information
   hosts: windows
@@ -183,7 +189,7 @@
       flat: true
 
   - name: create DNS A record for proxy host
-    community.windows.win_dns_record:
+    ansible.windows.win_dns_record:
       name: squid
       type: A
       value: '{{ hostvars["SQUID"]["ansible_host"] }}'
@@ -798,7 +804,7 @@
 
   - name: template out squid service units
     ansible.builtin.template:
-      src: systemd_unit.service.j2
+      src: squid_systemd_unit.j2
       dest: /etc/systemd/system/squid_{{ item.auth }}.service
     vars:
       description: Squid caching proxy - {{ item.auth }}
@@ -820,8 +826,54 @@
       state: started
     loop: '{{ proxy_info }}'
 
+  - name: create microsocks directory
+    ansible.builtin.file:
+      path: /opt/microsocks
+      state: directory
+
+  - name: download microsocks release
+    ansible.builtin.get_url:
+      url: http://ftp.barfooze.de/pub/sabotage/tarballs/microsocks-1.0.4.tar.xz
+      checksum: sha512:302fccb562668de32549ccf43e062a5d6ed17a955c2e4a49be51f1f2d1b54c3f687e92293cca54bc1d74bb6877e2bb3269fad167b9b26816a5f40e137d5aa545
+      dest: /opt/microsocks/microsocks-1.0.4.tar.xz
+
+  - name: extract microsocks archive
+    ansible.builtin.unarchive:
+      src: /opt/microsocks/microsocks-1.0.4.tar.xz
+      dest: /opt/microsocks
+      remote_src: true
+      extra_opts:
+      - --strip-components=1
+
+  - name: compile microsocks
+    ansible.builtin.shell:
+      cmd: make && ./install.sh -D -m 755 microsocks /opt/microsocks/microsocks
+      chdir: /opt/microsocks
+      creates: /opt/microsocks/microsocks
+
+  - name: create microsocks systemd units
+    ansible.builtin.template:
+      src: microsocks_systemd_unit.j2
+      dest: /etc/systemd/system/microsocks_{{ item.auth }}.service
+    loop: '{{ socks_info }}'
+
+  - name: add firewalld rule for microsocks endpoints
+    ansible.posix.firewalld:
+      port: '{{ item.port }}/tcp'
+      permanent: true
+      immediate: true
+      state: enabled
+    loop: '{{ socks_info }}'
+
+  - name: start socks services
+    ansible.builtin.systemd:
+      name: microsocks_{{ item.auth }}.service
+      enabled: true
+      state: started
+    loop: '{{ socks_info }}'
+
   - name: add hosts entry for remote-res to test
     ansible.builtin.lineinfile:
       path: /etc/hosts
-      line: '{{ hostvars["TEST"]["ansible_host"] }}  remote-res.{{ domain_realm }}'
+      line: '{{ hostvars["TEST"]["ansible_host"] }}  remote-res.{{ domain_realm }} test.{{ domain_realm }}'
       state: present

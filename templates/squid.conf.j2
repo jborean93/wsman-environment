@@ -73,6 +73,8 @@ http_access deny manager
 #
 
 pid_filename /var/run/squid-{{ http_port }}.pid
+access_log /var/log/squid/access-{{ auth }}.log
+cache_log /var/log/squid/cache-{{ auth }}.log
 
 # Example rule allowing access from your local networks.
 # Adapt localnet in the ACL section to list your (internal) IP networks

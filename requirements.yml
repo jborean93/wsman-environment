@@ -1,7 +1,7 @@
 collections:
 - name: ansible.posix  # Needs firewalld
 - name: ansible.windows
-  version: '>=1.5.0'  # Needs win_powershell
+  version: '>=2.8.0'  # Uses newly redirected modules win_dns_record
 - name: community.general  # Needs htpasswd
 - name: community.windows
 - name: microsoft.ad

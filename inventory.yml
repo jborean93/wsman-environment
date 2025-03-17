@@ -46,6 +46,14 @@ all:
     - auth: kerb
       port: 3135
 
+    socks_info:
+    - auth: anon
+      port: 3137
+    - auth: basic
+      port: 3138
+      username: socks_username
+      password: socks_password
+
     # Defines the HTTPS listeners to set up and metadata around the cert that backs it.
     # The public port are every 4th number starting from the base port.
     #     29900 - Public port for 1st scenario

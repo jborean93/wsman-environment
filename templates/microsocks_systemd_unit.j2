@@ -1,0 +1,18 @@
+[Unit]
+Description=microsocks - {{ item.auth }}
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{% if item.username is defined %}
+ExecStart=/opt/microsocks/microsocks -p {{ item.port }} -u {{ item.username }} -P {{ item.password }}
+{% else %}
+ExecStart=/opt/microsocks/microsocks -p {{ item.port }}
+{% endif %}
+KillMode=process
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target
